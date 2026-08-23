@@ -139,11 +139,13 @@ auto pWindow::construct() -> void {
   else if(_setIcon("/usr/local/share/pixmaps/"));
   else if(_setIcon("/usr/share/pixmaps/"));
 
-  auto visual = gdk_screen_get_rgba_visual(gdk_screen_get_default());
-  if(!visual) visual = gdk_screen_get_system_visual(gdk_screen_get_default());
-  if(visual) gtk_widget_set_visual(widget, visual);
+  // Use the system visual, not the RGBA one. An ARGB GtkWindow is composited as
+  // a hole wherever a child video surface has not drawn yet (the unloaded
+  // viewport). bsnes does not need window-level transparency.
+  if(auto visual = gdk_screen_get_system_visual(gdk_screen_get_default())) {
+    gtk_widget_set_visual(widget, visual);
+  }
 
-  gtk_widget_set_app_paintable(widget, true);
   gtk_widget_add_events(widget, GDK_CONFIGURE);
 
   menuContainer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);

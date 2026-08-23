@@ -278,7 +278,7 @@ auto Presentation::updateProgramIcon() -> void {
   presentation.layout.resize();
   //todo: video.clear() is not working on macOS/OpenGL 3.2
   if(auto [output, length] = video.acquire(1, 1); output) {
-    *output = 0;
+    *output = 255u << 24;
     video.release();
     video.output();
   }

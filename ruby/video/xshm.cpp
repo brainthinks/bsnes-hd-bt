@@ -36,10 +36,22 @@ struct VideoXShm : VideoDriver {
   }
 
   auto clear() -> void override {
-    auto dp = _inputBuffer;
-    uint length = _inputWidth * _inputHeight;
-    while(length--) *dp++ = 255u << 24;
-    output();
+    if(_inputBuffer) {
+      auto dp = _inputBuffer;
+      uint length = _inputWidth * _inputHeight;
+      while(length--) *dp++ = 255u << 24;
+    }
+    // Fill the on-screen buffer directly. output() no-ops when no frame has
+    // been acquired yet, which is the unloaded-viewport case.
+    if(_outputBuffer && _image && _window) {
+      auto dp = _outputBuffer;
+      uint length = _outputWidth * _outputHeight;
+      while(length--) *dp++ = 255u << 24;
+      GC gc = XCreateGC(_display, _window, 0, 0);
+      XShmPutImage(_display, _window, gc, _image, 0, 0, 0, 0, _outputWidth, _outputHeight, False);
+      XFreeGC(_display, gc);
+      XFlush(_display);
+    }
   }
 
   auto size(uint& width, uint& height) -> void override {
@@ -197,19 +209,23 @@ private:
     _depth = windowAttributes.depth;
     _visual = windowAttributes.visual;
     _colormap = XCreateColormap(_display, _parent, _visual, AllocNone);
+    unsigned long rgbMask = _visual->red_mask | _visual->green_mask | _visual->blue_mask;
+    unsigned long depthMask = _depth >= 32 ? 0xfffffffful : (1ul << _depth) - 1;
+    unsigned long background = depthMask & ~rgbMask;  // RGB 0, alpha 1 when present
     XSetWindowAttributes attributes{};
     attributes.border_pixel = 0;
+    attributes.background_pixel = background;
     attributes.colormap = _colormap;
     attributes.override_redirect = self.fullScreen;
 
     _window = XCreateWindow(_display, _parent,
       0, 0, windowAttributes.width, windowAttributes.height,
       0, _depth, InputOutput, _visual,
-      CWBorderPixel | CWColormap | CWOverrideRedirect, &attributes
+      CWBorderPixel | CWBackPixel | CWColormap | CWOverrideRedirect, &attributes
     );
 
     XSelectInput(_display, _window, ExposureMask);
-    XSetWindowBackground(_display, _window, 0);
+    XSetWindowBackground(_display, _window, background);
     XMapWindow(_display, _window);
     XFlush(_display);
 
@@ -251,6 +267,11 @@ private:
     XShmAttach(_display, &_shmInfo);
     _outputBuffer = (uint32_t*)_shmInfo.shmaddr;
     _image = XShmCreateImage(_display, _visual, _depth, ZPixmap, _shmInfo.shmaddr, &_shmInfo, _outputWidth, _outputHeight);
+    if(_outputBuffer) {
+      auto dp = _outputBuffer;
+      uint length = _outputWidth * _outputHeight;
+      while(length--) *dp++ = 255u << 24;
+    }
   }
 
   auto free() -> void {
