@@ -3,6 +3,9 @@ auto PPU::serialize(serializer& s) -> void {
   s.integer(display.overscan);
   s.integer(display.vdisp);
 
+  if(system.hdPPU()) {
+    return ppuhd.serialize(s);
+  }
   if(system.fastPPU()) {
     return ppufast.serialize(s);
   }

@@ -54,18 +54,43 @@ auto EnhancementSettings::create() -> void {
   overclockingSpacer.setColor({192, 192, 192});
 
   ppuLabel.setText("PPU (video)").setFont(Font().setBold());
-  fastPPU.setText("Fast mode").setChecked(settings.emulator.hack.ppu.fast).onToggle([&] {
-    settings.emulator.hack.ppu.fast = fastPPU.checked();
-    if(!fastPPU.checked()) {
-      noSpriteLimit.setEnabled(false);
-      deinterlace.setEnabled(false);
-      mode7Layout.setEnabled(false);
-    } else {
-      noSpriteLimit.setEnabled(true);
-      deinterlace.setEnabled(true);
-      mode7Layout.setEnabled(true);
+  auto updateScanlineOptions = [&] {
+    bool scanline = settings.emulator.hack.ppu.fast || settings.emulator.hack.ppu.hd;
+    noSpriteLimit.setEnabled(scanline);
+    deinterlace.setEnabled(scanline);
+    mode7Layout.setEnabled(scanline);
+  };
+  ppuRendererLabel.setText("Renderer:");
+  ppuRenderer.append(ComboButtonItem().setText("Accurate"));
+  ppuRenderer.append(ComboButtonItem().setText("Fast"));
+  ppuRenderer.append(ComboButtonItem().setText("HD (24-bit color)"));
+  {
+    uint index = 1;
+    if(settings.emulator.hack.ppu.hd) index = 2;
+    else if(!settings.emulator.hack.ppu.fast) index = 0;
+    ppuRenderer.item(index).setSelected();
+  }
+  auto activeMode7 = [&]() -> decltype(settings.emulator.hack.ppu.mode7)& {
+    return settings.emulator.hack.ppu.hd ? settings.emulator.hack.ppu.hdMode7 : settings.emulator.hack.ppu.mode7;
+  };
+  auto mode7Path = [&](string name) -> string {
+    return {settings.emulator.hack.ppu.hd ? "Hacks/PPU/HDMode7/" : "Hacks/PPU/Mode7/", name};
+  };
+  ppuRenderer.onChange([&] {
+    if(loadingMode7) return;
+    if(auto item = ppuRenderer.selected()) {
+      uint index = item.offset();
+      settings.emulator.hack.ppu.fast = index == 1;
+      settings.emulator.hack.ppu.hd = index == 2;
+      ppuRendererUpdate.setText(index != program.ppuRendererActive ? "Change" : "Reload");
+      // Do not update sibling widgets here: GTK crashes if the combo
+      // layout is mutated while still inside this changed handler.
+      mode7Refresh.setInterval(1);
+      mode7Refresh.setEnabled(true);
     }
-  }).doToggle();
+  });
+  ppuRendererUpdate.setText("Change").onActivate([&] { ppuRendererChange(); });
+  updateScanlineOptions();
   deinterlace.setText("Deinterlace").setChecked(settings.emulator.hack.ppu.deinterlace).onToggle([&] {
     settings.emulator.hack.ppu.deinterlace = deinterlace.checked();
     emulator->configure("Hacks/PPU/Deinterlace", settings.emulator.hack.ppu.deinterlace);
@@ -74,7 +99,7 @@ auto EnhancementSettings::create() -> void {
     settings.emulator.hack.ppu.noSpriteLimit = noSpriteLimit.checked();
   });
 
-  mode7Label.setText("HD Mode 7 (fast PPU only)").setFont(Font().setBold());
+  mode7Label.setText("HD Mode 7").setFont(Font().setBold());
   mode7ScaleLabel.setText("Scale:");
   mode7Scale.append(ComboButtonItem().setText( "240p").setAttribute("multiplier", 1));
   mode7Scale.append(ComboButtonItem().setText( "480p").setAttribute("multiplier", 2));
@@ -84,25 +109,57 @@ auto EnhancementSettings::create() -> void {
   mode7Scale.append(ComboButtonItem().setText("1440p").setAttribute("multiplier", 6));
   mode7Scale.append(ComboButtonItem().setText("1680p").setAttribute("multiplier", 7));
   mode7Scale.append(ComboButtonItem().setText("1920p").setAttribute("multiplier", 8));
-  for(uint n = 1; n <= 8; n++) {
-    if(settings.emulator.hack.ppu.mode7.scale == n) mode7Scale.item(n - 1).setSelected();
-  }
   mode7Scale.onChange([&] {
-    settings.emulator.hack.ppu.mode7.scale = mode7Scale.selected().attribute("multiplier").natural();
-    emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);
+    if(loadingMode7) return;
+    if(auto item = mode7Scale.selected()) {
+      activeMode7().scale = item.attribute("multiplier").natural();
+      emulator->configure(mode7Path("Scale"), activeMode7().scale);
+    }
   });
-  mode7Perspective.setText("Perspective correction").setChecked(settings.emulator.hack.ppu.mode7.perspective).onToggle([&] {
-    settings.emulator.hack.ppu.mode7.perspective = mode7Perspective.checked();
-    emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
+  mode7Perspective.setText("Perspective correction").onToggle([&] {
+    if(loadingMode7) return;
+    activeMode7().perspective = mode7Perspective.checked();
+    emulator->configure(mode7Path("Perspective"), activeMode7().perspective);
   });
-  mode7Supersample.setText("Supersampling").setChecked(settings.emulator.hack.ppu.mode7.supersample).onToggle([&] {
-    settings.emulator.hack.ppu.mode7.supersample = mode7Supersample.checked();
-    emulator->configure("Hacks/PPU/Mode7/Supersample", settings.emulator.hack.ppu.mode7.supersample);
+  mode7Supersample.setText("Supersampling").onToggle([&] {
+    if(loadingMode7) return;
+    activeMode7().supersample = mode7Supersample.checked();
+    emulator->configure(mode7Path("Supersample"), activeMode7().supersample);
   });
-  mode7Mosaic.setText("HD->SD Mosaic").setChecked(settings.emulator.hack.ppu.mode7.mosaic).onToggle([&] {
-    settings.emulator.hack.ppu.mode7.mosaic = mode7Mosaic.checked();
-    emulator->configure("Hacks/PPU/Mode7/Mosaic", settings.emulator.hack.ppu.mode7.mosaic);
+  mode7SsFactorLabel.setText("Supersampling:");
+  mode7SsFactor.append(ComboButtonItem().setText("Off").setAttribute("factor", 1));
+  for(uint n = 2; n <= 16; n++) {
+    mode7SsFactor.append(ComboButtonItem().setText({n, "×"}).setAttribute("factor", n));
+  }
+  mode7SsFactor.onChange([&] {
+    if(loadingMode7) return;
+    if(auto item = mode7SsFactor.selected()) {
+      auto& m7 = activeMode7();
+      m7.ssFactor = item.attribute("factor").natural();
+      m7.supersample = m7.ssFactor > 1;
+      emulator->configure(mode7Path("SsFactor"), m7.ssFactor);
+      emulator->configure(mode7Path("Supersample"), m7.supersample);
+    }
   });
+  mode7GpuSupersample.setText("GPU supersampling").setToolTip(
+    "Offload Mode 7 extra samples to OpenGL. Requires the OpenGL 3.2 video driver.\n"
+    "The CPU Mode 7 sampler is unchanged; it only skips extra samples when this is on."
+  ).onToggle([&] {
+    if(loadingMode7) return;
+    settings.emulator.hack.ppu.hdMode7.gpuSupersample = mode7GpuSupersample.checked();
+    emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", settings.emulator.hack.ppu.hdMode7.gpuSupersample);
+  });
+  mode7Mosaic.setText("HD->SD Mosaic").onToggle([&] {
+    if(loadingMode7) return;
+    activeMode7().mosaic = mode7Mosaic.checked();
+    emulator->configure(mode7Path("Mosaic"), activeMode7().mosaic);
+  });
+  mode7Refresh.onActivate([&] {
+    mode7Refresh.setEnabled(false);
+    reloadMode7Widgets();
+  });
+  reloadMode7Widgets();
+  ppuRendererChanged();
 
   dspLabel.setText("DSP (audio)").setFont(Font().setBold());
   fastDSP.setText("Fast mode").setChecked(settings.emulator.hack.dsp.fast).onToggle([&] {
@@ -134,5 +191,46 @@ auto EnhancementSettings::create() -> void {
     settings.emulator.hack.hotfixes = hotfixes.checked();
   });
 
-  note.setText("Note: some settings do not take effect until after reloading games.");
+  note.setText("Note: use Change/Reload to apply a new renderer. HD Mode 7 options apply immediately while HD is active.");
+}
+
+auto EnhancementSettings::reloadMode7Widgets() -> void {
+  loadingMode7 = true;
+  auto& m7 = settings.emulator.hack.ppu.hd ? settings.emulator.hack.ppu.hdMode7 : settings.emulator.hack.ppu.mode7;
+  bool hd = settings.emulator.hack.ppu.hd;
+  for(uint n = 1; n <= 8; n++) {
+    if(m7.scale == n) mode7Scale.item(n - 1).setSelected();
+  }
+  mode7Perspective.setChecked(hd ? true : m7.perspective);
+  mode7Perspective.setVisible(!hd);
+  mode7Supersample.setChecked(m7.supersample);
+  mode7Mosaic.setChecked(m7.mosaic);
+  mode7Supersample.setVisible(!hd);
+  mode7SsFactorLabel.setVisible(hd);
+  mode7SsFactor.setVisible(hd);
+  mode7GpuSupersample.setVisible(hd);
+  mode7GpuSupersample.setChecked(settings.emulator.hack.ppu.hdMode7.gpuSupersample);
+  mode7Mosaic.setVisible(!hd);
+  uint factor = m7.ssFactor < 1 ? 1 : m7.ssFactor;
+  for(uint n : range(mode7SsFactor.itemCount())) {
+    if(mode7SsFactor.item(n).attribute("factor").natural() == factor) {
+      mode7SsFactor.item(n).setSelected();
+    }
+  }
+  mode7Label.setText(hd ? "HD Mode 7 (HD PPU)" : "HD Mode 7 (Fast PPU)");
+  loadingMode7 = false;
+}
+
+auto EnhancementSettings::ppuRendererChanged() -> void {
+  string name = "Fast";
+  if(program.ppuRendererActive == 2) name = "HD (24-bit color)";
+  else if(program.ppuRendererActive == 0) name = "Accurate";
+  ppuRendererActiveLabel.setText({"Active renderer: ", name});
+  uint selected = program.ppuRendererActive;
+  if(auto item = ppuRenderer.selected()) selected = item.offset();
+  ppuRendererUpdate.setText(selected != program.ppuRendererActive ? "Change" : "Reload");
+}
+
+auto EnhancementSettings::ppuRendererChange() -> void {
+  program.applyPPURenderer(settingsWindow);
 }

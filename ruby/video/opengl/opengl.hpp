@@ -1,5 +1,6 @@
 #if defined(DISPLAY_XORG)
   #include <GL/gl.h>
+  #include <GL/glext.h>
   #include <GL/glx.h>
   #ifndef glGetProcAddress
     #define glGetProcAddress(name) (*glXGetProcAddress)((const GLubyte*)(name))
@@ -91,6 +92,19 @@ struct OpenGL : OpenGLProgram {
   };
   set<Setting> settings;
   bool initialized = false;
+
+  auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines) -> void;
+  auto outputMode7() -> bool;
+  GLuint mode7Program = 0;
+  GLuint mode7Vertex = 0;
+  GLuint mode7Fragment = 0;
+  GLuint mode7MapTex = 0;
+  GLuint mode7LineTex = 0;
+  bool mode7Gpu = false;
+  uint mode7Ss = 1;
+  float mode7LineOrigin = 0;
+  const uint32_t* mode7Map = nullptr;
+  const float* mode7Lines = nullptr;
 };
 
 #include "texture.hpp"

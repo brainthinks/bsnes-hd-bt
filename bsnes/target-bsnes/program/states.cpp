@@ -82,7 +82,14 @@ auto Program::saveState(string filename) -> bool {
 
   vector<uint8_t> previewRLE;
   //this can be null if a state is captured before the first frame of video output after power/reset
-  if(screenshot.data) {
+  if(screenshot.data32) {
+    image preview;
+    preview.transform(0, 32, 0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff);
+    preview.copy(screenshot.data32, screenshot.pitch, screenshot.width, screenshot.height);
+    preview.transform(0, 15, 0x8000, 0x7c00, 0x03e0, 0x001f);
+    if(preview.width() != 256 || preview.height() != 240) preview.scale(256, 240, true);
+    previewRLE = Encode::RLE<2>({preview.data(), preview.size()});
+  } else if(screenshot.data) {
     image preview;
     preview.transform(0, 15, 0x8000, 0x7c00, 0x03e0, 0x001f);
     preview.copy(screenshot.data, screenshot.pitch, screenshot.width, screenshot.height);

@@ -207,6 +207,7 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
   //this will always be the case; so we can avoid an unnecessary copy or one-frame delay here
   //if the core were to exit between a frame event, the next frame might've been only partially rendered
   screenshot.data   = data;
+  screenshot.data32 = nullptr;
   screenshot.pitch  = pitch;
   screenshot.width  = width;
   screenshot.height = height;
@@ -227,6 +228,59 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
   if(auto [output, length] = video.acquire(filterWidth, filterHeight); output) {
     filterRender(palette, output, length, (const uint16_t*)data, pitch << 1, width, height);
     video.release();
+    video.output(outputWidth, outputHeight);
+  }
+
+  inputManager.frame();
+
+  if(presentation.frameAdvance.checked()) {
+    frameAdvanceLock = true;
+  }
+
+  static uint frameCounter = 0;
+  static uint64 previous, current;
+  frameCounter++;
+
+  current = chrono::timestamp();
+  if(current != previous) {
+    previous = current;
+    showFrameRate({frameCounter * (1 + emulator->frameSkip()), " FPS"});
+    frameCounter = 0;
+  }
+}
+
+auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height, uint scale) -> void {
+  screenshot.data   = nullptr;
+  screenshot.data32 = data;
+  screenshot.pitch  = pitch;
+  screenshot.width  = width;
+  screenshot.height = height;
+  screenshot.scale  = scale;
+
+  uint pixelPitch = pitch >> 2;
+  if(!settings.video.overscan) {
+    uint multiplier = height / 240;
+    data += 8 * multiplier * pixelPitch;
+    height -= 16 * multiplier;
+  }
+
+  uint outputWidth, outputHeight;
+  viewportSize(outputWidth, outputHeight, scale);
+
+  if(auto [output, length] = video.acquire(width, height); output) {
+    uint dstPitch = length >> 2;
+    for(uint y : range(height)) {
+      memory::copy<uint32>(output + y * dstPitch, data + y * pixelPitch, width);
+    }
+    video.release();
+    if(auto g = emulator->gpuMode7(); g.active && g.map && g.lines) {
+      // PPU scanline y at the top of the presented texture: game overscan
+      // pads the 224-line screen by 7 rows, and the UI overscan option crops 8.
+      float lineOrigin = (g.overscan ? 0.0f : -7.0f) + (settings.video.overscan ? 0.0f : 8.0f);
+      video.setMode7Gpu(true, g.ss, lineOrigin, g.map, g.lines);
+    } else {
+      video.setMode7Gpu(false, 1, 0.0f, nullptr, nullptr);
+    }
     video.output(outputWidth, outputHeight);
   }
 

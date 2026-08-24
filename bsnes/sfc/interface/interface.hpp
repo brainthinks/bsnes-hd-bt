@@ -74,6 +74,8 @@ struct Interface : Emulator::Interface {
 
   auto runAhead() -> bool override;
   auto setRunAhead(bool runAhead) -> void override;
+
+  auto gpuMode7() const -> Emulator::Interface::GpuMode7 override;
 };
 
 #include "configuration.hpp"

@@ -87,12 +87,64 @@ auto OpenGL::lock(uint32_t*& data, uint& pitch) -> bool {
   return data = buffer;
 }
 
+auto OpenGL::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines) -> void {
+  mode7Gpu = enable;
+  mode7Ss = ss ? ss : 1;
+  mode7LineOrigin = lineOrigin;
+  mode7Map = map;
+  mode7Lines = lines;
+}
+
+auto OpenGL::outputMode7() -> bool {
+  if(!mode7Gpu || !mode7Program || !mode7Map || !mode7Lines) return false;
+
+  if(!mode7MapTex) glGenTextures(1, &mode7MapTex);
+  if(!mode7LineTex) glGenTextures(1, &mode7LineTex);
+
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, mode7MapTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1024, 1024, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Map);
+  glrParameters(GL_NEAREST, GL_REPEAT);
+
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, mode7LineTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 240, 0, GL_RGBA, GL_FLOAT, mode7Lines);
+  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glrParameters(GL_NEAREST, GL_CLAMP_TO_BORDER);
+
+  GLuint saved = program;
+  program = mode7Program;
+  glUseProgram(mode7Program);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glrUniform1i("source[0]", 0);
+  glrUniform1i("mode7Map", 1);
+  glrUniform1i("mode7Lines", 2);
+  glrUniform1i("ss", (GLint)mode7Ss);
+  glrUniform1f("lineOrigin", mode7LineOrigin);
+  float sw = width ? width : 1, sh = height ? height : 1;
+  uint targetWidth = absoluteWidth ? absoluteWidth : (outputWidth ? outputWidth : 1);
+  uint targetHeight = absoluteHeight ? absoluteHeight : (outputHeight ? outputHeight : 1);
+  float tw = targetWidth, th = targetHeight;
+  float ow = outputWidth ? outputWidth : 1, oh = outputHeight ? outputHeight : 1;
+  glrUniform4f("sourceSize", sw, sh, 1.0 / sw, 1.0 / sh);
+  glrUniform4f("targetSize", tw, th, 1.0 / tw, 1.0 / th);
+  glrUniform4f("outputSize", ow, oh, 1.0 / ow, 1.0 / oh);
+  render(width, height, outputX, outputY, outputWidth, outputHeight);
+  program = saved;
+  return true;
+}
+
 auto OpenGL::output() -> void {
   clear();
 
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, getFormat(), getType(), buffer);
+
+  if(outputMode7()) return;
 
   struct Source {
     GLuint texture;
@@ -200,6 +252,12 @@ auto OpenGL::initialize(const string& shader) -> bool {
   OpenGLSurface::allocate();
   glrLinkProgram(program);
 
+  mode7Program = glCreateProgram();
+  mode7Vertex = glrCreateShader(mode7Program, GL_VERTEX_SHADER, OpenGLOutputVertexShader);
+  mode7Fragment = glrCreateShader(mode7Program, GL_FRAGMENT_SHADER, OpenGLMode7FragmentShader);
+  if(mode7Vertex && mode7Fragment) glrLinkProgram(mode7Program);
+  else { mode7Program = 0; }
+
   setShader(shader);
   return initialized = true;
 }
@@ -208,6 +266,11 @@ auto OpenGL::terminate() -> void {
   if(!initialized) return;
   setShader("");  //release shader resources (eg frame[] history)
   OpenGLSurface::release();
+  if(mode7Fragment) { if(mode7Program) glDetachShader(mode7Program, mode7Fragment); glDeleteShader(mode7Fragment); mode7Fragment = 0; }
+  if(mode7Vertex) { if(mode7Program) glDetachShader(mode7Program, mode7Vertex); glDeleteShader(mode7Vertex); mode7Vertex = 0; }
+  if(mode7Program) { glDeleteProgram(mode7Program); mode7Program = 0; }
+  if(mode7MapTex) { glDeleteTextures(1, &mode7MapTex); mode7MapTex = 0; }
+  if(mode7LineTex) { glDeleteTextures(1, &mode7LineTex); mode7LineTex = 0; }
   if(buffer) { delete[] buffer; buffer = nullptr; }
   initialized = false;
 }

@@ -138,6 +138,7 @@ namespace SuperFamicom {
   #include <sfc/dsp/dsp.hpp>
   #include <sfc/ppu/ppu.hpp>
   #include <sfc/ppu-fast/ppu.hpp>
+  #include <sfc/ppu-hd/ppu.hpp>
 
   #include <sfc/controller/controller.hpp>
   #include <sfc/expansion/expansion.hpp>

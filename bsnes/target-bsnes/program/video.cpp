@@ -116,6 +116,9 @@ auto Program::updateVideoPalette() -> void {
   }
 
   emulator->configure("Video/ColorEmulation", false);
+  emulator->configure("Video/Luminance", settings.video.luminance);
+  emulator->configure("Video/Saturation", settings.video.saturation);
+  emulator->configure("Video/Gamma", settings.video.gamma);
 }
 
 auto Program::updateVideoEffects() -> void {

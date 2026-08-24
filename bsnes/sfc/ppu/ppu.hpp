@@ -174,6 +174,7 @@ private:
   friend class PPU::Screen;
   friend class System;
   friend class PPUfast;
+  friend class PPUhd;
 };
 
 extern PPU ppu;

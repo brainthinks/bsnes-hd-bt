@@ -1,4 +1,7 @@
 auto PPU::latchCounters(uint hcounter, uint vcounter) -> void {
+  if(system.hdPPU()) {
+    return ppuhd.latchCounters(hcounter, vcounter);
+  }
   if(system.fastPPU()) {
     return ppufast.latchCounters(hcounter, vcounter);
   }
@@ -9,6 +12,9 @@ auto PPU::latchCounters(uint hcounter, uint vcounter) -> void {
 }
 
 auto PPU::latchCounters() -> void {
+  if(system.hdPPU()) {
+    return ppuhd.latchCounters();
+  }
   if(system.fastPPU()) {
     return ppufast.latchCounters();
   }

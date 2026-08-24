@@ -7,6 +7,7 @@ auto Program::load() -> void {
   emulator->configure("Hacks/CPU/Overclock", settings.emulator.hack.cpu.overclock);
   emulator->configure("Hacks/CPU/FastMath", settings.emulator.hack.cpu.fastMath);
   emulator->configure("Hacks/PPU/Fast", settings.emulator.hack.ppu.fast);
+  emulator->configure("Hacks/PPU/HD", settings.emulator.hack.ppu.hd);
   emulator->configure("Hacks/PPU/Deinterlace", settings.emulator.hack.ppu.deinterlace);
   emulator->configure("Hacks/PPU/NoSpriteLimit", settings.emulator.hack.ppu.noSpriteLimit);
   emulator->configure("Hacks/PPU/NoVRAMBlocking", settings.emulator.hack.ppu.noVRAMBlocking);
@@ -14,6 +15,12 @@ auto Program::load() -> void {
   emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
   emulator->configure("Hacks/PPU/Mode7/Supersample", settings.emulator.hack.ppu.mode7.supersample);
   emulator->configure("Hacks/PPU/Mode7/Mosaic", settings.emulator.hack.ppu.mode7.mosaic);
+  emulator->configure("Hacks/PPU/HDMode7/Scale", settings.emulator.hack.ppu.hdMode7.scale);
+  emulator->configure("Hacks/PPU/HDMode7/Perspective", settings.emulator.hack.ppu.hdMode7.perspective);
+  emulator->configure("Hacks/PPU/HDMode7/Supersample", settings.emulator.hack.ppu.hdMode7.supersample);
+  emulator->configure("Hacks/PPU/HDMode7/SsFactor", settings.emulator.hack.ppu.hdMode7.ssFactor);
+  emulator->configure("Hacks/PPU/HDMode7/Mosaic", settings.emulator.hack.ppu.hdMode7.mosaic);
+  emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", settings.emulator.hack.ppu.hdMode7.gpuSupersample);
   emulator->configure("Hacks/DSP/Fast", settings.emulator.hack.dsp.fast);
   emulator->configure("Hacks/DSP/Cubic", settings.emulator.hack.dsp.cubic);
   emulator->configure("Hacks/DSP/EchoShadow", settings.emulator.hack.dsp.echoShadow);
@@ -43,6 +50,8 @@ auto Program::load() -> void {
   }
   hackCompatibility();
   emulator->power();
+  ppuRendererActive = settings.emulator.hack.ppu.hd ? 2 : settings.emulator.hack.ppu.fast ? 1 : 0;
+  enhancementSettings.ppuRendererChanged();
   if(emulatorSettings.autoLoadStateOnLoad.checked()) {
     program.loadState("Quick/Undo");
   }
@@ -58,6 +67,9 @@ auto Program::load() -> void {
   presentation.updateStateMenus();
   presentation.speedNormal.setChecked();
   presentation.runEmulation.setChecked().doActivate();
+  if(auto slot = getenv("BSNES_LOAD_STATE")) {
+    program.loadState(slot);
+  }
   presentation.updateProgramIcon();
   presentation.updateStatusIcon();
   rewindReset();  //starts rewind state recording
@@ -314,6 +326,59 @@ auto Program::power() -> void {
   hackCompatibility();
   emulator->power();
   showMessage("Power cycle");
+}
+
+auto Program::applyPPURenderer(Window parent) -> void {
+  uint selected = 1;
+  if(auto item = enhancementSettings.ppuRenderer.selected()) selected = item.offset();
+  settings.emulator.hack.ppu.fast = selected == 1;
+  settings.emulator.hack.ppu.hd = selected == 2;
+
+  if(!emulator->loaded()) {
+    emulator->configure("Hacks/PPU/Fast", settings.emulator.hack.ppu.fast);
+    emulator->configure("Hacks/PPU/HD", settings.emulator.hack.ppu.hd);
+    settings.save();
+    ppuRendererActive = selected;
+    enhancementSettings.ppuRendererChanged();
+    return;
+  }
+
+  bool oldScanline = ppuRendererActive == 1 || ppuRendererActive == 2;
+  bool newScanline = selected == 1 || selected == 2;
+  string warning = {
+    "Warning: changing the PPU renderer while a game is loaded may cause bsnes to crash.\n"
+    "It is highly recommended you unload your game first to be safe.\n"
+  };
+  if(!oldScanline || !newScanline) {
+    warning.append("\nSwitching to or from the Accurate renderer cannot keep your current position.\n");
+  }
+  warning.append("Do you wish to proceed with the renderer change now anyway?");
+
+  if(MessageDialog(warning).setAlignment(parent).question() != "Yes") return;
+
+  save();
+  saveUndoState();
+  settings.general.crashed = true;
+  settings.save();
+
+  bool restored = false;
+  if(oldScanline && newScanline) {
+    serializer s = emulator->serialize();
+    hackCompatibility();
+    restored = emulator->unserialize(s);
+  }
+
+  if(!restored) {
+    hackCompatibility();
+    emulator->power();
+  }
+
+  settings.general.crashed = false;
+  settings.save();
+  ppuRendererActive = selected;
+  rewindReset();
+  enhancementSettings.ppuRendererChanged();
+  showMessage(restored ? "PPU renderer applied" : "PPU renderer applied (game restarted)");
 }
 
 auto Program::unload() -> void {

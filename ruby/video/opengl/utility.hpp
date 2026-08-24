@@ -44,6 +44,11 @@ static auto glrUniform1i(const string& name, GLint value) -> void {
   glUniform1i(location, value);
 }
 
+static auto glrUniform1f(const string& name, GLfloat value) -> void {
+  GLint location = glGetUniformLocation(glrProgram(), name);
+  glUniform1f(location, value);
+}
+
 static auto glrUniform4f(const string& name, GLfloat value0, GLfloat value1, GLfloat value2, GLfloat value3) -> void {
   GLint location = glGetUniformLocation(glrProgram(), name);
   glUniform4f(location, value0, value1, value2, value3);

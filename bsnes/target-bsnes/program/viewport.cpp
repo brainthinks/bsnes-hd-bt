@@ -47,6 +47,34 @@ auto Program::viewportRefresh() -> void {
   uint height = 240;
   uint scale  = 1;
 
+  if(emulator->loaded() && screenshot.data32) {
+    auto data32 = screenshot.data32;
+    pitch  = screenshot.pitch;
+    width  = screenshot.width;
+    height = screenshot.height;
+    scale  = screenshot.scale;
+
+    if(!settings.video.overscan) {
+      uint multiplier = height / 240;
+      data32 += 8 * multiplier * (pitch >> 2);
+      height -= 16 * multiplier;
+    }
+
+    uint outputWidth, outputHeight;
+    viewportSize(outputWidth, outputHeight, scale);
+
+    if(auto [output, length] = video.acquire(width, height); output) {
+      uint dstPitch = length >> 2;
+      uint srcPitch = pitch >> 2;
+      for(uint y : range(height)) {
+        memory::copy<uint32>(output + y * dstPitch, data32 + y * srcPitch, width);
+      }
+      video.release();
+      video.output(outputWidth, outputHeight);
+    }
+    return;
+  }
+
   if(emulator->loaded() && screenshot.data) {
     data   = screenshot.data;
     pitch  = screenshot.pitch;

@@ -7,6 +7,7 @@ struct System {
   inline auto apuFrequency() const -> double { return information.apuFrequency; }
 
   inline auto fastPPU() const -> bool { return hacks.fastPPU; }
+  inline auto hdPPU() const -> bool { return hacks.hdPPU; }
 
   auto run() -> void;
   auto runToSave() -> void;
@@ -40,6 +41,7 @@ private:
 
   struct Hacks {
     bool fastPPU = false;
+    bool hdPPU = false;
   } hacks;
 
   auto serializeAll(serializer&, bool synchronize) -> void;

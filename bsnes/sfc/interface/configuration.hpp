@@ -25,6 +25,9 @@ struct Configuration {
   struct Video {
     bool blurEmulation = true;
     bool colorEmulation = true;
+    uint luminance = 100;
+    uint saturation = 100;
+    uint gamma = 100;
   } video;
 
   struct Hacks {
@@ -36,6 +39,7 @@ struct Configuration {
     } cpu;
     struct PPU {
       bool fast = true;
+      bool hd = false;
       bool deinterlace = true;
       bool noSpriteLimit = false;
       bool noVRAMBlocking = false;
@@ -44,8 +48,10 @@ struct Configuration {
         uint scale = 1;
         bool perspective = true;
         bool supersample = false;
+        uint ssFactor = 1;
         bool mosaic = true;
-      } mode7;
+        bool gpuSupersample = false;
+      } mode7, hdMode7{5, true, true, 4, false, false};
     } ppu;
     struct DSP {
       bool fast = true;

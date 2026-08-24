@@ -104,6 +104,15 @@ struct Interface {
 
   virtual auto runAhead() -> bool { return false; }
   virtual auto setRunAhead(bool runAhead) -> void {}
+
+  struct GpuMode7 {
+    bool active = false;
+    uint ss = 1;
+    bool overscan = false;
+    const uint32_t* map = nullptr;
+    const float* lines = nullptr;
+  };
+  virtual auto gpuMode7() const -> GpuMode7 { return {}; }
 };
 
 }

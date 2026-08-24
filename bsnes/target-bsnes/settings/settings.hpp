@@ -14,7 +14,7 @@ struct Settings : Markup::Node {
     bool flush = false;
     string monitor = "Primary";
     string format = "Default";
-    string shader = "Blur";
+    string shader = "None";
 
     uint luminance = 100;
     uint saturation = 100;
@@ -109,6 +109,7 @@ struct Settings : Markup::Node {
       } cpu;
       struct PPU {
         bool fast = true;
+        bool hd = false;
         bool deinterlace = true;
         bool noSpriteLimit = false;
         bool noVRAMBlocking = false;
@@ -116,8 +117,10 @@ struct Settings : Markup::Node {
           uint scale = 1;
           bool perspective = true;
           bool supersample = false;
+          uint ssFactor = 1;
           bool mosaic = true;
-        } mode7;
+          bool gpuSupersample = false;
+        } mode7, hdMode7{5, true, true, 4, false, false};
       } ppu;
       struct DSP {
         bool fast = true;
@@ -332,8 +335,13 @@ public:
 
 struct EnhancementSettings : VerticalLayout {
   auto create() -> void;
+  auto reloadMode7Widgets() -> void;
+  auto ppuRendererChanged() -> void;
+  auto ppuRendererChange() -> void;
 
 public:
+  bool loadingMode7 = false;
+  Timer mode7Refresh;
   Label runAheadLabel{this, Size{~0, 0}, 2};
   HorizontalLayout runAheadLayout{this, Size{~0, 0}};
     RadioLabel runAhead0{&runAheadLayout, Size{0, 0}};
@@ -361,7 +369,10 @@ public:
   //
   Label ppuLabel{this, Size{~0, 0}, 2};
   HorizontalLayout ppuLayout{this, Size{~0, 0}};
-    CheckLabel fastPPU{&ppuLayout, Size{0, 0}};
+    Label ppuRendererLabel{&ppuLayout, Size{0, 0}};
+    ComboButton ppuRenderer{&ppuLayout, Size{0, 0}};
+    Button ppuRendererUpdate{&ppuLayout, Size{0, 0}};
+    Label ppuRendererActiveLabel{&ppuLayout, Size{0, 0}};
     CheckLabel deinterlace{&ppuLayout, Size{0, 0}};
     CheckLabel noSpriteLimit{&ppuLayout, Size{0, 0}};
   //
@@ -371,6 +382,9 @@ public:
     ComboButton mode7Scale{&mode7Layout, Size{0, 0}};
     CheckLabel mode7Perspective{&mode7Layout, Size{0, 0}};
     CheckLabel mode7Supersample{&mode7Layout, Size{0, 0}};
+    Label mode7SsFactorLabel{&mode7Layout, Size{0, 0}};
+    ComboButton mode7SsFactor{&mode7Layout, Size{0, 0}};
+    CheckLabel mode7GpuSupersample{&mode7Layout, Size{0, 0}};
     CheckLabel mode7Mosaic{&mode7Layout, Size{0, 0}};
   //
   Label dspLabel{this, Size{~0, 0}, 2};

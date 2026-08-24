@@ -186,7 +186,8 @@ auto System::unload() -> void {
 }
 
 auto System::power(bool reset) -> void {
-  hacks.fastPPU = configuration.hacks.ppu.fast;
+  hacks.hdPPU = configuration.hacks.ppu.hd;
+  hacks.fastPPU = configuration.hacks.ppu.fast && !hacks.hdPPU;
 
   Emulator::audio.reset(interface);
 

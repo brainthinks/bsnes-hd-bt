@@ -341,4 +341,16 @@ auto Interface::setRunAhead(bool runAhead) -> void {
   system.runAhead = runAhead;
 }
 
+auto Interface::gpuMode7() const -> Emulator::Interface::GpuMode7 {
+  Emulator::Interface::GpuMode7 result;
+  if(ppuhd.gpuMode7.active) {
+    result.active = true;
+    result.ss = ppuhd.gpuMode7.ss;
+    result.overscan = ppuhd.latch.overscan;
+    result.map = ppuhd.gpuMode7.map;
+    result.lines = ppuhd.gpuMode7.lines;
+  }
+  return result;
+}
+
 }

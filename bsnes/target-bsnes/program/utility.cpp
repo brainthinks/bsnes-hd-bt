@@ -85,12 +85,18 @@ auto Program::updateStatus() -> void {
 }
 
 auto Program::captureScreenshot() -> bool {
-  if(emulator->loaded() && screenshot.data) {
+  if(emulator->loaded() && (screenshot.data || screenshot.data32)) {
     if(auto filename = screenshotPath()) {
-      //RGB555 -> RGB888
-      image capture{0, 16, 0x8000, 0x7c00, 0x03e0, 0x001f};
-      capture.copy(screenshot.data, screenshot.pitch, screenshot.width, screenshot.height);
-      capture.transform(0, 32, 0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff);
+      image capture;
+      if(screenshot.data32) {
+        capture.transform(0, 32, 0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff);
+        capture.copy(screenshot.data32, screenshot.pitch, screenshot.width, screenshot.height);
+      } else {
+        //RGB555 -> RGB888
+        capture.transform(0, 16, 0x8000, 0x7c00, 0x03e0, 0x001f);
+        capture.copy(screenshot.data, screenshot.pitch, screenshot.width, screenshot.height);
+        capture.transform(0, 32, 0xff000000, 0x00ff0000, 0x0000ff00, 0x000000ff);
+      }
 
       //normalize pixel aspect ratio to 1:1
       if(capture.width() == 512 && capture.height() == 240) capture.scale(512, 480, false);  //hires

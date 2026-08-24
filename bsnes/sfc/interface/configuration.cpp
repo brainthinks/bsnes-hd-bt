@@ -16,12 +16,16 @@ auto Configuration::process(Markup::Node document, bool load) -> void {
 
   bind(boolean, "Video/BlurEmulation", video.blurEmulation);
   bind(boolean, "Video/ColorEmulation", video.colorEmulation);
+  bind(natural, "Video/Luminance", video.luminance);
+  bind(natural, "Video/Saturation", video.saturation);
+  bind(natural, "Video/Gamma", video.gamma);
 
   bind(boolean, "Hacks/Hotfixes", hacks.hotfixes);
   bind(text,    "Hacks/Entropy", hacks.entropy);
   bind(natural, "Hacks/CPU/Overclock", hacks.cpu.overclock);
   bind(boolean, "Hacks/CPU/FastMath", hacks.cpu.fastMath);
   bind(boolean, "Hacks/PPU/Fast", hacks.ppu.fast);
+  bind(boolean, "Hacks/PPU/HD", hacks.ppu.hd);
   bind(boolean, "Hacks/PPU/Deinterlace", hacks.ppu.deinterlace);
   bind(natural, "Hacks/PPU/RenderCycle", hacks.ppu.renderCycle);
   bind(boolean, "Hacks/PPU/NoSpriteLimit", hacks.ppu.noSpriteLimit);
@@ -30,6 +34,12 @@ auto Configuration::process(Markup::Node document, bool load) -> void {
   bind(boolean, "Hacks/PPU/Mode7/Perspective", hacks.ppu.mode7.perspective);
   bind(boolean, "Hacks/PPU/Mode7/Supersample", hacks.ppu.mode7.supersample);
   bind(boolean, "Hacks/PPU/Mode7/Mosaic", hacks.ppu.mode7.mosaic);
+  bind(natural, "Hacks/PPU/HDMode7/Scale", hacks.ppu.hdMode7.scale);
+  bind(boolean, "Hacks/PPU/HDMode7/Perspective", hacks.ppu.hdMode7.perspective);
+  bind(boolean, "Hacks/PPU/HDMode7/Supersample", hacks.ppu.hdMode7.supersample);
+  bind(natural, "Hacks/PPU/HDMode7/SsFactor", hacks.ppu.hdMode7.ssFactor);
+  bind(boolean, "Hacks/PPU/HDMode7/Mosaic", hacks.ppu.hdMode7.mosaic);
+  bind(boolean, "Hacks/PPU/HDMode7/GpuSupersample", hacks.ppu.hdMode7.gpuSupersample);
   bind(boolean, "Hacks/DSP/Fast", hacks.dsp.fast);
   bind(boolean, "Hacks/DSP/Cubic", hacks.dsp.cubic);
   bind(boolean, "Hacks/DSP/EchoShadow", hacks.dsp.echoShadow);

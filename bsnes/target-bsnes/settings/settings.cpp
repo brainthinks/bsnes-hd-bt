@@ -121,6 +121,7 @@ auto Settings::process(bool load) -> void {
   bind(natural, "Emulator/Hack/CPU/Overclock",           emulator.hack.cpu.overclock);
   bind(boolean, "Emulator/Hack/CPU/FastMath",            emulator.hack.cpu.fastMath);
   bind(boolean, "Emulator/Hack/PPU/Fast",                emulator.hack.ppu.fast);
+  bind(boolean, "Emulator/Hack/PPU/HD",                  emulator.hack.ppu.hd);
   bind(boolean, "Emulator/Hack/PPU/Deinterlace",         emulator.hack.ppu.deinterlace);
   bind(boolean, "Emulator/Hack/PPU/NoSpriteLimit",       emulator.hack.ppu.noSpriteLimit);
   bind(boolean, "Emulator/Hack/PPU/NoVRAMBlocking",      emulator.hack.ppu.noVRAMBlocking);
@@ -128,6 +129,18 @@ auto Settings::process(bool load) -> void {
   bind(boolean, "Emulator/Hack/PPU/Mode7/Perspective",   emulator.hack.ppu.mode7.perspective);
   bind(boolean, "Emulator/Hack/PPU/Mode7/Supersample",   emulator.hack.ppu.mode7.supersample);
   bind(boolean, "Emulator/Hack/PPU/Mode7/Mosaic",        emulator.hack.ppu.mode7.mosaic);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/Scale",       emulator.hack.ppu.hdMode7.scale);
+  bind(boolean, "Emulator/Hack/PPU/HDMode7/Perspective", emulator.hack.ppu.hdMode7.perspective);
+  bind(boolean, "Emulator/Hack/PPU/HDMode7/Supersample", emulator.hack.ppu.hdMode7.supersample);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/SsFactor",    emulator.hack.ppu.hdMode7.ssFactor);
+  bind(boolean, "Emulator/Hack/PPU/HDMode7/Mosaic",      emulator.hack.ppu.hdMode7.mosaic);
+  bind(boolean, "Emulator/Hack/PPU/HDMode7/GpuSupersample", emulator.hack.ppu.hdMode7.gpuSupersample);
+  if(load && !operator[]("Emulator/Hack/PPU/HDMode7/Scale") && operator[]("Emulator/Hack/PPU/Mode7/Scale")) {
+    emulator.hack.ppu.hdMode7.scale = emulator.hack.ppu.mode7.scale;
+  }
+  if(load && !operator[]("Emulator/Hack/PPU/HDMode7/SsFactor") && operator[]("Emulator/Hack/PPU/HDMode7/Supersample")) {
+    emulator.hack.ppu.hdMode7.ssFactor = emulator.hack.ppu.hdMode7.supersample ? 2 : 1;
+  }
   bind(boolean, "Emulator/Hack/DSP/Fast",                emulator.hack.dsp.fast);
   bind(boolean, "Emulator/Hack/DSP/Cubic",               emulator.hack.dsp.cubic);
   bind(boolean, "Emulator/Hack/DSP/EchoShadow",          emulator.hack.dsp.echoShadow);

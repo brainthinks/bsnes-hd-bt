@@ -126,6 +126,10 @@ auto Video::poll() -> void {
   return instance->poll();
 }
 
+auto Video::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines) -> void {
+  instance->setMode7Gpu(enable, ss, lineOrigin, map, lines);
+}
+
 //
 
 auto Video::onUpdate(const function<void (uint, uint)>& onUpdate) -> void {

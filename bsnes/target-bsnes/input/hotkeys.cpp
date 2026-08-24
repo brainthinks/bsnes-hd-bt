@@ -144,7 +144,20 @@ auto InputManager::bindHotkeys() -> void {
   }));
 
   hotkeys.append(InputHotkey("Toggle Supersampling").onPress([] {
-    enhancementSettings.mode7Supersample.setChecked(!enhancementSettings.mode7Supersample.checked()).doToggle();
+    if(settings.emulator.hack.ppu.hd) {
+      auto& m7 = settings.emulator.hack.ppu.hdMode7;
+      m7.ssFactor = m7.ssFactor > 1 ? 1 : 2;
+      m7.supersample = m7.ssFactor > 1;
+      emulator->configure("Hacks/PPU/HDMode7/SsFactor", m7.ssFactor);
+      emulator->configure("Hacks/PPU/HDMode7/Supersample", m7.supersample);
+      for(uint n : range(enhancementSettings.mode7SsFactor.itemCount())) {
+        if(enhancementSettings.mode7SsFactor.item(n).attribute("factor").natural() == m7.ssFactor) {
+          enhancementSettings.mode7SsFactor.item(n).setSelected();
+        }
+      }
+    } else {
+      enhancementSettings.mode7Supersample.setChecked(!enhancementSettings.mode7Supersample.checked()).doToggle();
+    }
   }));
 
   hotkeys.append(InputHotkey("Reset Emulation").onPress([] {

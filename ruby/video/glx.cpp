@@ -74,6 +74,10 @@ struct VideoGLX : VideoDriver, OpenGL {
     return true;
   }
 
+  auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines) -> void override {
+    OpenGL::setMode7Gpu(enable, ss, lineOrigin, map, lines);
+  }
+
   auto focused() -> bool override {
     return true;
   }

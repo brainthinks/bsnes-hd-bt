@@ -1,6 +1,7 @@
 auto Program::hackCompatibility() -> void {
   string entropy = settings.emulator.hack.entropy;
   bool fastPPU = settings.emulator.hack.ppu.fast;
+  bool hdPPU = settings.emulator.hack.ppu.hd;
   bool fastPPUNoSpriteLimit = settings.emulator.hack.ppu.noSpriteLimit;
   bool fastDSP = settings.emulator.hack.dsp.fast;
   bool coprocessorDelayedSync = settings.emulator.hack.coprocessor.delayedSync;
@@ -10,20 +11,20 @@ auto Program::hackCompatibility() -> void {
   auto region = superFamicom.region;
 
   //relies on mid-scanline rendering techniques
-  if(title == "AIR STRIKE PATROL" || title == "DESERT FIGHTER") fastPPU = false;
+  if(title == "AIR STRIKE PATROL" || title == "DESERT FIGHTER") fastPPU = false, hdPPU = false;
 
   //the dialogue text is blurry due to an issue in the scanline-based renderer's color math support
-  if(title == "マーヴェラス") fastPPU = false;
+  if(title == "マーヴェラス") fastPPU = false, hdPPU = false;
 
   //stage 2 uses pseudo-hires in a way that's not compatible with the scanline-based renderer
-  if(title == "SFC クレヨンシンチャン") fastPPU = false;
+  if(title == "SFC クレヨンシンチャン") fastPPU = false, hdPPU = false;
 
   //title screen game select (after choosing a game) changes OAM tiledata address mid-frame
   //this is only supported by the cycle-based PPU renderer
-  if(title == "Winter olympics") fastPPU = false;
+  if(title == "Winter olympics") fastPPU = false, hdPPU = false;
 
   //title screen shows remnants of the flag after choosing a language with the scanline-based renderer
-  if(title == "WORLD CUP STRIKER") fastPPU = false;
+  if(title == "WORLD CUP STRIKER") fastPPU = false, hdPPU = false;
 
   //relies on cycle-accurate writes to the echo buffer
   if(title == "KOUSHIEN_2") fastDSP = false;
@@ -58,12 +59,19 @@ auto Program::hackCompatibility() -> void {
 
   emulator->configure("Hacks/Entropy", entropy);
   emulator->configure("Hacks/PPU/Fast", fastPPU);
+  emulator->configure("Hacks/PPU/HD", hdPPU);
   emulator->configure("Hacks/PPU/NoSpriteLimit", fastPPUNoSpriteLimit);
   emulator->configure("Hacks/PPU/RenderCycle", renderCycle);
   emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);
   emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
   emulator->configure("Hacks/PPU/Mode7/Supersample", settings.emulator.hack.ppu.mode7.supersample);
   emulator->configure("Hacks/PPU/Mode7/Mosaic", settings.emulator.hack.ppu.mode7.mosaic);
+  emulator->configure("Hacks/PPU/HDMode7/Scale", settings.emulator.hack.ppu.hdMode7.scale);
+  emulator->configure("Hacks/PPU/HDMode7/Perspective", settings.emulator.hack.ppu.hdMode7.perspective);
+  emulator->configure("Hacks/PPU/HDMode7/Supersample", settings.emulator.hack.ppu.hdMode7.supersample);
+  emulator->configure("Hacks/PPU/HDMode7/SsFactor", settings.emulator.hack.ppu.hdMode7.ssFactor);
+  emulator->configure("Hacks/PPU/HDMode7/Mosaic", settings.emulator.hack.ppu.hdMode7.mosaic);
+  emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", settings.emulator.hack.ppu.hdMode7.gpuSupersample);
   emulator->configure("Hacks/DSP/Fast", fastDSP);
   emulator->configure("Hacks/DSP/Cubic", settings.emulator.hack.dsp.cubic);
   emulator->configure("Hacks/Coprocessor/DelayedSync", coprocessorDelayedSync);

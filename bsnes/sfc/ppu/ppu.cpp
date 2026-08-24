@@ -70,10 +70,16 @@ auto PPU::load() -> bool {
   ppu2.version = max(1, min(3, configuration.system.ppu2.version));
   vram.mask = configuration.system.ppu1.vram.size / sizeof(uint16) - 1;
   if(vram.mask != 0xffff) vram.mask = 0x7fff;
-  return true && ppufast.load();
+  return true && ppufast.load() && ppuhd.load();
 }
 
 auto PPU::power(bool reset) -> void {
+  if(system.hdPPU()) {
+    create(PPUhd::Enter, system.cpuFrequency());
+    ppuhd.power(reset);
+    return;
+  }
+
   if(system.fastPPU()) {
     create(PPUfast::Enter, system.cpuFrequency());
     ppufast.power(reset);
@@ -187,6 +193,9 @@ auto PPU::power(bool reset) -> void {
 }
 
 auto PPU::refresh() -> void {
+  if(system.hdPPU()) {
+    return ppuhd.refresh();
+  }
   if(system.fastPPU()) {
     return ppufast.refresh();
   }

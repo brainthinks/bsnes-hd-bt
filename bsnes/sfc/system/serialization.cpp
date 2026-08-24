@@ -18,6 +18,7 @@ auto System::serialize(bool synchronize) -> serializer {
   s.array(description);
   s.boolean(synchronize);
   s.boolean(hacks.fastPPU);
+  s.boolean(hacks.hdPPU);
   serializeAll(s, synchronize);
   return s;
 }
@@ -29,6 +30,7 @@ auto System::unserialize(serializer& s) -> bool {
   char description[512] = {};
   bool synchronize = false;
   bool fastPPU = false;
+  bool hdPPU = false;
 
   s.integer(signature);
   s.integer(serializeSize);
@@ -36,11 +38,13 @@ auto System::unserialize(serializer& s) -> bool {
   s.array(description);
   s.boolean(synchronize);
   s.boolean(fastPPU);
+  s.boolean(hdPPU);
 
   if(signature != 0x31545342) return false;
   if(serializeSize != information.serializeSize[synchronize]) return false;
   if(string{version} != Emulator::SerializerVersion) return false;
   if(fastPPU != hacks.fastPPU) return false;
+  if(hdPPU != hacks.hdPPU) return false;
 
   if(synchronize) power(/* reset = */ false);
   serializeAll(s, synchronize);
@@ -114,6 +118,7 @@ auto System::serializeInit(bool synchronize) -> uint {
   s.array(description);
   s.boolean(synchronize);
   s.boolean(hacks.fastPPU);
+  s.boolean(hacks.hdPPU);
   serializeAll(s, synchronize);
   return s.size();
 }

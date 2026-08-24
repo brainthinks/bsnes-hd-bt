@@ -29,6 +29,7 @@ struct Program : Emulator::Platform
 	auto open(uint id, string name, vfs::file::mode mode, bool required) -> shared_pointer<vfs::file> override;
 	auto load(uint id, string name, string type, vector<string> options = {}) -> Emulator::Platform::Load override;
 	auto videoFrame(const uint16* data, uint pitch, uint width, uint height, uint scale) -> void override;
+	auto videoFrame(const uint32* data, uint pitch, uint width, uint height, uint scale) -> void override;
 	auto audioFrame(const double* samples, uint channels) -> void override;
 	auto inputPoll(uint port, uint device, uint input) -> int16 override;
 	auto inputRumble(uint port, uint device, uint input, bool enable) -> void override;
@@ -320,6 +321,22 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
 	filterRender(palette, videoOut, filterWidth << 2, (const uint16_t*)data, pitch, width, height);
 
 	video_cb(videoOut, filterWidth, filterHeight, filterWidth << 2);
+}
+
+auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height, uint scale) -> void {
+	uint pixelPitch = pitch >> 2;
+	if (!overscan)
+	{
+		uint multiplier = height / 240;
+		data += 8 * pixelPitch * multiplier;
+		height -= 16 * multiplier;
+	}
+
+	for(uint y : range(height)) {
+		memory::copy<uint32>(videoOut + y * width, data + y * pixelPitch, width);
+	}
+
+	video_cb(videoOut, width, height, width << 2);
 }
 
 // Double the fun!
