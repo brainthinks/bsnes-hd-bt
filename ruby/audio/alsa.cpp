@@ -6,7 +6,10 @@ struct AudioALSA : AudioDriver {
   ~AudioALSA() { terminate(); }
 
   auto create() -> bool override {
-    super.setDevice(hasDevices().first());
+    auto devices = hasDevices();
+    string device = devices ? devices.first() : "";
+    if(device == "null") device = "default";
+    super.setDevice(device);
     super.setChannels(2);
     super.setFrequency(48000);
     super.setLatency(20);
