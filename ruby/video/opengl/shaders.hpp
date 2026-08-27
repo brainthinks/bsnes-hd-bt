@@ -176,7 +176,7 @@ static string OpenGLMode7FragmentShader = R"(
     return true;
   }
 
-  vec4 sampleMap(vec2 uv, int repeatMode, vec2 duvdx, vec2 duvdy, bool filtered) {
+  vec4 sampleMap(vec2 uv, int repeatMode, vec2 duvdx, vec2 duvdy) {
     bool oob = uv.x < 0.0 || uv.x >= 1024.0 || uv.y < 0.0 || uv.y >= 1024.0;
     if(oob) {
       if(repeatMode == 2) return vec4(0.0);
@@ -185,13 +185,17 @@ static string OpenGLMode7FragmentShader = R"(
         return texelFetch(mode7Tile0, t, 0);
       }
     }
-    if(!filtered) {
-      ivec2 ip = ivec2(floor(uv));
-      ip = ivec2(ip.x & 1023, ip.y & 1023);
-      return texelFetch(mode7Map, ip, 0);
+    vec2 gx = duvdx;
+    vec2 gy = duvdy;
+    float t = max(length(gx), length(gy));
+    // Near field: at least ~1 texel of bilinear so we never snap to nearest
+    // (that snap was the F-Zero sharpness ring). Horizon keeps the real footprint.
+    if(t < 0.9) {
+      float s = 0.9 / max(t, 1.0e-6);
+      gx *= s;
+      gy *= s;
     }
-    // Bias the footprint so we pick a blurrier mip rather than sparkling.
-    return textureGrad(mode7Map, uv / 1024.0, duvdx * 1.15 / 1024.0, duvdy * 1.15 / 1024.0);
+    return textureGrad(mode7Map, uv / 1024.0, gx / 1024.0, gy / 1024.0);
   }
 
   vec2 wrapDiff(vec2 d) {
@@ -200,10 +204,10 @@ static string OpenGLMode7FragmentShader = R"(
     return d;
   }
 
-  vec4 shadeM7(vec4 texel, vec2 snes, int y, bool filtered) {
+  vec4 shadeM7(vec4 texel, vec2 snes, int y) {
     // Mipmaps average palette-0 holes; don't punch through to the CPU
     // nearest floor (scanline bands + sparkle).
-    if(texel.a < (filtered ? 0.02 : 0.5)) return vec4(0.0);
+    if(texel.a < 0.02) return vec4(0.0);
     int wx = int(clamp(snes.x, 0.0, 255.0));
     int y1 = min(y + 1, 239);
     float fy = clamp(snes.y - float(y), 0.0, 1.0);
@@ -211,12 +215,12 @@ static string OpenGLMode7FragmentShader = R"(
     return vec4(rgb, 1.0);
   }
 
-  vec4 sampleM7(vec2 snes, bool filtered, vec2 duvdx, vec2 duvdy) {
+  vec4 sampleM7(vec2 snes, vec2 duvdx, vec2 duvdy) {
     vec2 uv;
     int repeatMode;
     int y;
     if(!projectM7(snes, uv, repeatMode, y)) return vec4(0.0);
-    return shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy, filtered), snes, y, filtered);
+    return shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy), snes, y);
   }
 
   void main() {
@@ -249,17 +253,19 @@ static string OpenGLMode7FragmentShader = R"(
     vec4 acc = vec4(0.0);
     float wFilt = valid ? smoothstep(0.45, 1.15, texels) : 0.0;
     if(wFilt > 0.0) {
-      acc = shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy, true), snes, y, true);
+      acc = shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy), snes, y);
     }
     if(wFilt < 1.0) {
       vec4 sharp = vec4(0.0);
       int n = ss < 1 ? 1 : ss;
+      vec2 tap = duvdx / float(n);
+      vec2 tapy = duvdy / float(n);
       for(int j = 0; j < 16; j++) {
         if(j >= n) break;
         for(int i = 0; i < 16; i++) {
           if(i >= n) break;
           vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
-          sharp += sampleM7(snes + o * pixel, false, duvdx, duvdy);
+          sharp += sampleM7(snes + o * pixel, tap, tapy);
         }
       }
       sharp /= float(n * n);
