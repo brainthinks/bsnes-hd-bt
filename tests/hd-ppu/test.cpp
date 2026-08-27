@@ -188,6 +188,7 @@ static auto testShaderSource(const std::string& path) -> void {
   CHECK(hasIdent(body, "applyMath") || frag.find("flags & 1") != std::string::npos);
   CHECK(frag.find("math.yzw") != std::string::npos);
   CHECK(frag.find("mode7Window") != std::string::npos);
+  CHECK(frag.find("textureGrad") != std::string::npos);
 
 #ifdef HD_PPU_GL
   static bool tried = false, haveGL = false;

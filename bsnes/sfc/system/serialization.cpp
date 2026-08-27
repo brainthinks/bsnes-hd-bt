@@ -17,8 +17,11 @@ auto System::serialize(bool synchronize) -> serializer {
   s.array(version);
   s.array(description);
   s.boolean(synchronize);
-  s.boolean(hacks.fastPPU);
-  s.boolean(hacks.hdPPU);
+  // HD is Fast-shaped: same VRAM/CGRAM/IO payload as Fast. Official only
+  // stores this scanline bit, so writing a separate hdPPU flag made official
+  // Fast states unloadable here and blocked Fast↔HD Change/Reload.
+  bool scanline = hacks.fastPPU || hacks.hdPPU;
+  s.boolean(scanline);
   serializeAll(s, synchronize);
   return s;
 }
@@ -29,22 +32,26 @@ auto System::unserialize(serializer& s) -> bool {
   char version[16] = {};
   char description[512] = {};
   bool synchronize = false;
-  bool fastPPU = false;
-  bool hdPPU = false;
+  bool scanline = false;
 
   s.integer(signature);
   s.integer(serializeSize);
   s.array(version);
   s.array(description);
   s.boolean(synchronize);
-  s.boolean(fastPPU);
-  s.boolean(hdPPU);
+  s.boolean(scanline);
 
   if(signature != 0x31545342) return false;
-  if(serializeSize != information.serializeSize[synchronize]) return false;
   if(string{version} != Emulator::SerializerVersion) return false;
-  if(fastPPU != hacks.fastPPU) return false;
-  if(hdPPU != hacks.hdPPU) return false;
+  // Builds that wrote hacks.hdPPU as an extra boolean are 1 byte larger.
+  if(serializeSize == information.serializeSize[synchronize] + 1) {
+    bool oldHd = false;
+    s.boolean(oldHd);
+    scanline = scanline || oldHd;
+  } else if(serializeSize != information.serializeSize[synchronize]) {
+    return false;
+  }
+  if(scanline != (hacks.fastPPU || hacks.hdPPU)) return false;
 
   if(synchronize) power(/* reset = */ false);
   serializeAll(s, synchronize);
@@ -117,8 +124,8 @@ auto System::serializeInit(bool synchronize) -> uint {
   s.array(version);
   s.array(description);
   s.boolean(synchronize);
-  s.boolean(hacks.fastPPU);
-  s.boolean(hacks.hdPPU);
+  bool scanline = hacks.fastPPU || hacks.hdPPU;
+  s.boolean(scanline);
   serializeAll(s, synchronize);
   return s.size();
 }

@@ -143,14 +143,17 @@ static string OpenGLMode7FragmentShader = R"(
     return rgb;
   }
 
-  vec4 sampleM7(vec2 snes) {
-    int y = int(clamp(snes.y, 0.0, 239.0));
-    vec4 aa = texelFetch(mode7Lines, ivec2(0, y), 0);
-    vec4 ab = texelFetch(mode7Lines, ivec2(1, y), 0);
-    vec4 lp = texelFetch(mode7Lines, ivec2(2, y), 0);
-    vec4 of = texelFetch(mode7Lines, ivec2(3, y), 0);
-    // of.w is 0 for scanlines the CPU did not render as Mode 7.
-    if(of.w < 1.5) return vec4(0.0);
+  bool projectM7(vec2 snes, out vec2 uv, out int repeatMode, out int yLine) {
+    yLine = int(clamp(snes.y, 0.0, 239.0));
+    vec4 aa = texelFetch(mode7Lines, ivec2(0, yLine), 0);
+    vec4 ab = texelFetch(mode7Lines, ivec2(1, yLine), 0);
+    vec4 lp = texelFetch(mode7Lines, ivec2(2, yLine), 0);
+    vec4 of = texelFetch(mode7Lines, ivec2(3, yLine), 0);
+    if(of.w < 1.5) {
+      uv = vec2(0.0);
+      repeatMode = 0;
+      return false;
+    }
     float ya = lp.x;
     float yb = lp.y;
     float yf = snes.y - 0.5;
@@ -162,35 +165,58 @@ static string OpenGLMode7FragmentShader = R"(
     int packBits = int(of.z + 0.5);
     float xf = snes.x - 0.5;
     if((packBits & 1) != 0) xf = 255.0 - xf;
-    int repeatMode = (packBits / 2) & 3;
+    repeatMode = (packBits / 2) & 3;
     float hcenter = lp.z;
     float vcenter = lp.w;
     float ht = of.x;
     float vty = of.y + yf;
     float originX = matA * ht + matB * vty + hcenter * 256.0;
     float originY = matC * ht + matD * vty + vcenter * 256.0;
-    vec2 uv = vec2(originX + matA * xf, originY + matC * xf) / 256.0;
-    ivec2 ip = ivec2(uv);
-    bool oob = ip.x < 0 || ip.x > 1023 || ip.y < 0 || ip.y > 1023;
-    vec4 texel = vec4(0.0);
+    uv = vec2(originX + matA * xf, originY + matC * xf) / 256.0;
+    return true;
+  }
+
+  vec4 sampleMap(vec2 uv, int repeatMode, vec2 duvdx, vec2 duvdy, bool filtered) {
+    bool oob = uv.x < 0.0 || uv.x >= 1024.0 || uv.y < 0.0 || uv.y >= 1024.0;
     if(oob) {
       if(repeatMode == 2) return vec4(0.0);
       if(repeatMode == 3) {
-        texel = texelFetch(mode7Tile0, ivec2(ip.x & 7, ip.y & 7), 0);
-      } else {
-        ip = ivec2(ip.x & 1023, ip.y & 1023);
-        texel = texelFetch(mode7Map, ip, 0);
+        ivec2 t = ivec2(int(floor(uv.x)) & 7, int(floor(uv.y)) & 7);
+        return texelFetch(mode7Tile0, t, 0);
       }
-    } else {
-      texel = texelFetch(mode7Map, ip, 0);
     }
-    if(texel.a < 0.5) return vec4(0.0);
+    if(!filtered) {
+      ivec2 ip = ivec2(floor(uv));
+      ip = ivec2(ip.x & 1023, ip.y & 1023);
+      return texelFetch(mode7Map, ip, 0);
+    }
+    // Bias the footprint so we pick a blurrier mip rather than sparkling.
+    return textureGrad(mode7Map, uv / 1024.0, duvdx * 1.15 / 1024.0, duvdy * 1.15 / 1024.0);
+  }
 
+  vec2 wrapDiff(vec2 d) {
+    if(d.x > 512.0) d.x -= 1024.0; if(d.x < -512.0) d.x += 1024.0;
+    if(d.y > 512.0) d.y -= 1024.0; if(d.y < -512.0) d.y += 1024.0;
+    return d;
+  }
+
+  vec4 shadeM7(vec4 texel, vec2 snes, int y, bool filtered) {
+    // Mipmaps average palette-0 holes; don't punch through to the CPU
+    // nearest floor (scanline bands + sparkle).
+    if(texel.a < (filtered ? 0.02 : 0.5)) return vec4(0.0);
     int wx = int(clamp(snes.x, 0.0, 255.0));
     int y1 = min(y + 1, 239);
     float fy = clamp(snes.y - float(y), 0.0, 1.0);
     vec3 rgb = mix(applyMath(texel.rgb, y, wx), applyMath(texel.rgb, y1, wx), fy);
     return vec4(rgb, 1.0);
+  }
+
+  vec4 sampleM7(vec2 snes, bool filtered, vec2 duvdx, vec2 duvdy) {
+    vec2 uv;
+    int repeatMode;
+    int y;
+    if(!projectM7(snes, uv, repeatMode, y)) return vec4(0.0);
+    return shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy, filtered), snes, y, filtered);
   }
 
   void main() {
@@ -207,17 +233,38 @@ static string OpenGLMode7FragmentShader = R"(
     float snesH = sourceSize.y / scale;
     vec2 snes = vec2(texCoord.x * 256.0, lineOrigin + texCoord.y * snesH);
     vec2 pixel = vec2(256.0, snesH) / max(targetSize.xy, vec2(1.0));
+
+    vec2 uv, uvx, uvLine;
+    int repeatMode, y, rIgn, yIgn;
+    bool valid = projectM7(snes, uv, repeatMode, y);
+    projectM7(snes + vec2(pixel.x, 0.0), uvx, rIgn, yIgn);
+    // Y footprint must cross a SNES scanline so HDMA perspective is included.
+    // pixel.y is often < 1, so snes+pixel.y stays on the same line and LOD
+    // jumps once per scanline (horizontal banding).
+    projectM7(snes + vec2(0.0, 1.0), uvLine, rIgn, yIgn);
+    vec2 duvdx = wrapDiff(uvx - uv);
+    vec2 duvdy = wrapDiff(uvLine - uv) * pixel.y;
+    float texels = max(length(duvdx), length(duvdy));
+
     vec4 acc = vec4(0.0);
-    int n = ss < 1 ? 1 : ss;
-    for(int j = 0; j < 16; j++) {
-      if(j >= n) break;
-      for(int i = 0; i < 16; i++) {
-        if(i >= n) break;
-        vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
-        acc += sampleM7(snes + o * pixel);
-      }
+    float wFilt = valid ? smoothstep(0.45, 1.15, texels) : 0.0;
+    if(wFilt > 0.0) {
+      acc = shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy, true), snes, y, true);
     }
-    acc /= float(n * n);
+    if(wFilt < 1.0) {
+      vec4 sharp = vec4(0.0);
+      int n = ss < 1 ? 1 : ss;
+      for(int j = 0; j < 16; j++) {
+        if(j >= n) break;
+        for(int i = 0; i < 16; i++) {
+          if(i >= n) break;
+          vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
+          sharp += sampleM7(snes + o * pixel, false, duvdx, duvdy);
+        }
+      }
+      sharp /= float(n * n);
+      acc = mix(sharp, acc, wFilt);
+    }
     vec4 dest = vec4(spr.rgb, 1.0);
     dest = mix(dest, acc, acc.a);
     fragColor = dest;

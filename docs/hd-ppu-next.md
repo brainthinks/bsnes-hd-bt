@@ -75,14 +75,15 @@ Linux GLX is list 1. Windows/macOS OpenGL is list 2.
 
 ### Save states
 
-Fast↔HD serialize was supposed to match; an F-Zero Slot 1 load failed with
-"incompatible format." Required:
+HD is Fast-shaped (same VRAM/CGRAM/IO). Do not write a separate `hdPPU`
+bit — that made official Fast states fail here and made Change/Reload
+Fast↔HD power-cycle. Accurate stays incompatible with scanline states.
 
 - Save and load on HD, same session
 - HD → Fast and Fast → HD (Change/Reload without reset, and via `.bst` / `.bsz`)
 - HD → Accurate (expect a defined failure or a restart, not a corrupt PPU)
 - Quick and undo/redo
-- Confirm official Fast states still load in Fast on this fork
+- Official Fast states load in Fast (and HD) on this fork
 
 ### Tests
 

@@ -39,6 +39,7 @@ PFNGLGENFRAMEBUFFERSPROC glGenFramebuffers = nullptr;
 PFNGLDELETEFRAMEBUFFERSPROC glDeleteFramebuffers = nullptr;
 PFNGLBINDFRAMEBUFFERPROC glBindFramebuffer = nullptr;
 PFNGLFRAMEBUFFERTEXTURE2DPROC glFramebufferTexture2D = nullptr;
+PFNGLGENERATEMIPMAPPROC glGenerateMipmap = nullptr;
 #endif
 #if defined(DISPLAY_WINDOWS)
 PFNGLACTIVETEXTUREPROC glActiveTexture = nullptr;
@@ -90,6 +91,7 @@ static bool OpenGLBind() {
   bind(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers);
   bind(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);
   bind(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);
+  bind(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap);
   #endif
   #if defined(DISPLAY_WINDOWS)
   bind(PFNGLACTIVETEXTUREPROC, glActiveTexture);
