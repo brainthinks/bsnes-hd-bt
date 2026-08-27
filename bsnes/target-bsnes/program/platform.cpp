@@ -277,9 +277,9 @@ auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height
       // PPU scanline y at the top of the presented texture: game overscan
       // pads the 224-line screen by 7 rows, and the UI overscan option crops 8.
       float lineOrigin = (g.overscan ? 0.0f : -7.0f) + (settings.video.overscan ? 0.0f : 8.0f);
-      video.setMode7Gpu(true, g.ss, lineOrigin, g.map, g.lines);
+      video.setMode7Gpu(true, g.ss, lineOrigin, g.map, g.lines, g.tile0, g.colorWindow);
     } else {
-      video.setMode7Gpu(false, 1, 0.0f, nullptr, nullptr);
+      video.setMode7Gpu(false, 1, 0.0f, nullptr, nullptr, nullptr, nullptr);
     }
     video.output(outputWidth, outputHeight);
   }

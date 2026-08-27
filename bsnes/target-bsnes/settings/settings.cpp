@@ -124,6 +124,9 @@ auto Settings::process(bool load) -> void {
   bind(boolean, "Emulator/Hack/PPU/HD",                  emulator.hack.ppu.hd);
   bind(boolean, "Emulator/Hack/PPU/Deinterlace",         emulator.hack.ppu.deinterlace);
   bind(boolean, "Emulator/Hack/PPU/NoSpriteLimit",       emulator.hack.ppu.noSpriteLimit);
+  bind(boolean, "Emulator/Hack/PPU/HD-Deinterlace",      emulator.hack.ppu.hdDeinterlace);
+  bind(boolean, "Emulator/Hack/PPU/HD-NoSpriteLimit",    emulator.hack.ppu.hdNoSpriteLimit);
+  bind(boolean, "Emulator/Hack/PPU/HD-TrueColor",        emulator.hack.ppu.hdTrueColor);
   bind(boolean, "Emulator/Hack/PPU/NoVRAMBlocking",      emulator.hack.ppu.noVRAMBlocking);
   bind(natural, "Emulator/Hack/PPU/Mode7/Scale",         emulator.hack.ppu.mode7.scale);
   bind(boolean, "Emulator/Hack/PPU/Mode7/Perspective",   emulator.hack.ppu.mode7.perspective);
@@ -140,6 +143,12 @@ auto Settings::process(bool load) -> void {
   }
   if(load && !operator[]("Emulator/Hack/PPU/HDMode7/SsFactor") && operator[]("Emulator/Hack/PPU/HDMode7/Supersample")) {
     emulator.hack.ppu.hdMode7.ssFactor = emulator.hack.ppu.hdMode7.supersample ? 2 : 1;
+  }
+  if(load && !operator[]("Emulator/Hack/PPU/HD-Deinterlace") && operator[]("Emulator/Hack/PPU/Deinterlace")) {
+    emulator.hack.ppu.hdDeinterlace = emulator.hack.ppu.deinterlace;
+  }
+  if(load && !operator[]("Emulator/Hack/PPU/HD-NoSpriteLimit") && operator[]("Emulator/Hack/PPU/NoSpriteLimit")) {
+    emulator.hack.ppu.hdNoSpriteLimit = emulator.hack.ppu.noSpriteLimit;
   }
   bind(boolean, "Emulator/Hack/DSP/Fast",                emulator.hack.dsp.fast);
   bind(boolean, "Emulator/Hack/DSP/Cubic",               emulator.hack.dsp.cubic);

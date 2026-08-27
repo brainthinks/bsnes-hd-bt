@@ -13,6 +13,7 @@ PPU ppu;
 #include "line.cpp"
 #include "background.cpp"
 #include "mode7.cpp"
+#include "gpu-mode7.hpp"
 #include "mode7hd.cpp"
 #include "object.cpp"
 #include "window.cpp"
@@ -28,25 +29,24 @@ auto PPU::ss() const -> bool { return latch.ss; }
 auto PPU::hdScale() const -> uint { return configuration.hacks.ppu.hdMode7.scale; }
 auto PPU::hdPerspective() const -> bool { return true; }
 auto PPU::hdSupersample() const -> uint {
-  if(configuration.hacks.ppu.hdMode7.gpuSupersample) return 1;
-  uint factor = configuration.hacks.ppu.hdMode7.ssFactor;
-  if(factor < 2 && configuration.hacks.ppu.hdMode7.supersample) factor = 2;
-  if(factor < 1) factor = 1;
-  if(factor > 16) factor = 16;
-  return factor;
+  return HDMode7::cpuSampleScale(
+    configuration.hacks.ppu.hdMode7.gpuSupersample,
+    configuration.hacks.ppu.hdMode7.ssFactor,
+    configuration.hacks.ppu.hdMode7.supersample
+  );
 }
 auto PPU::gpuSupersample() const -> bool {
   return configuration.hacks.ppu.hdMode7.gpuSupersample;
 }
 auto PPU::gpuSsFactor() const -> uint {
-  uint factor = configuration.hacks.ppu.hdMode7.ssFactor;
-  if(factor < 2 && configuration.hacks.ppu.hdMode7.supersample) factor = 2;
-  if(factor < 1) factor = 1;
-  if(factor > 16) factor = 16;
-  return factor;
+  return HDMode7::gpuSampleScale(
+    configuration.hacks.ppu.hdMode7.ssFactor,
+    configuration.hacks.ppu.hdMode7.supersample
+  );
 }
 auto PPU::hdMosaic() const -> bool { return configuration.hacks.ppu.hdMode7.mosaic; }
-auto PPU::deinterlace() const -> bool { return configuration.hacks.ppu.deinterlace; }
+auto PPU::hdTrueColor() const -> bool { return configuration.hacks.ppu.hdTrueColor; }
+auto PPU::deinterlace() const -> bool { return configuration.hacks.ppu.hdDeinterlace; }
 auto PPU::renderCycle() const -> uint { return configuration.hacks.ppu.renderCycle; }
 auto PPU::noVRAMBlocking() const -> bool { return configuration.hacks.ppu.noVRAMBlocking; }
 #define ppu ppuhd
@@ -226,22 +226,38 @@ auto PPU::refresh() -> void {
 auto PPU::prepareGpuMode7() -> void {
   auto table = lightTable[io.displayBrightness];
   if(!table) table = lightTable[15];
+  auto pack = [&](uint palette) -> uint32 {
+    uint32 color = 0;
+    if(palette && table) {
+      if(io.col.directColor) {
+        uint16 dc = (palette << 2 & 0x001c) + (palette << 4 & 0x0380) + (palette << 7 & 0x6000);
+        color = table[dc & 0x7fff];
+      } else {
+        color = table[cgram[palette] & 0x7fff];
+      }
+      if(!hdTrueColor()) {
+        uint r = (color >>  0 & 255) * 31 / 255;
+        uint g = (color >>  8 & 255) * 31 / 255;
+        uint b = (color >> 16 & 255) * 31 / 255;
+        color = b * 255 / 31 << 16 | g * 255 / 31 << 8 | r * 255 / 31;
+      }
+      color |= 0xff000000u;
+    }
+    return color;
+  };
   uint32* map = gpuMode7.map;
   for(uint py = 0; py < 1024; py++) {
     for(uint px = 0; px < 1024; px++) {
       uint tile = vram[(py >> 3 & 127) * 128 + (px >> 3 & 127)] & 0xff;
       uint palette = vram[(((py & 7) << 3) + (px & 7)) + (tile << 6)] >> 8;
-      uint32 color = 0;
-      if(palette && table) {
-        if(io.col.directColor) {
-          uint16 dc = (palette << 2 & 0x001c) + (palette << 4 & 0x0380) + (palette << 7 & 0x6000);
-          color = table[dc & 0x7fff];
-        } else {
-          color = table[cgram[palette] & 0x7fff];
-        }
-        color |= 0xff000000u;
-      }
-      *map++ = color;
+      *map++ = pack(palette);
+    }
+  }
+  uint32* t0 = gpuMode7.tile0;
+  for(uint py = 0; py < 8; py++) {
+    for(uint px = 0; px < 8; px++) {
+      uint palette = vram[((py & 7) << 3) + (px & 7)] >> 8;
+      *t0++ = pack(palette);
     }
   }
 }
@@ -269,8 +285,8 @@ auto PPU::power(bool reset) -> void {
   updateVideoMode();
 
   #undef ppu
-  ItemLimit = !configuration.hacks.ppu.noSpriteLimit ? 32 : 128;
-  TileLimit = !configuration.hacks.ppu.noSpriteLimit ? 34 : 128;
+  ItemLimit = !configuration.hacks.ppu.hdNoSpriteLimit ? 32 : 128;
+  TileLimit = !configuration.hacks.ppu.hdNoSpriteLimit ? 34 : 128;
 
   Line::start = 0;
   Line::count = 0;

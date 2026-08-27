@@ -62,3 +62,6 @@ include $(ui)/GNUmakefile
 clean:
 	$(call delete,obj/*)
 	$(call delete,out/*)
+
+test:
+	$(MAKE) -C ../tests/hd-ppu run

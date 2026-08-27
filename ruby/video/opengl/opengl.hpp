@@ -93,18 +93,22 @@ struct OpenGL : OpenGLProgram {
   set<Setting> settings;
   bool initialized = false;
 
-  auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines) -> void;
+  auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines, const uint32_t* tile0, const uint8_t* colorWindow) -> void;
   auto outputMode7() -> bool;
   GLuint mode7Program = 0;
   GLuint mode7Vertex = 0;
   GLuint mode7Fragment = 0;
   GLuint mode7MapTex = 0;
   GLuint mode7LineTex = 0;
+  GLuint mode7Tile0Tex = 0;
+  GLuint mode7WindowTex = 0;
   bool mode7Gpu = false;
   uint mode7Ss = 1;
   float mode7LineOrigin = 0;
   const uint32_t* mode7Map = nullptr;
   const float* mode7Lines = nullptr;
+  const uint32_t* mode7Tile0 = nullptr;
+  const uint8_t* mode7Window = nullptr;
 };
 
 #include "texture.hpp"

@@ -87,12 +87,14 @@ auto OpenGL::lock(uint32_t*& data, uint& pitch) -> bool {
   return data = buffer;
 }
 
-auto OpenGL::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines) -> void {
+auto OpenGL::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines, const uint32_t* tile0, const uint8_t* colorWindow) -> void {
   mode7Gpu = enable;
   mode7Ss = ss ? ss : 1;
   mode7LineOrigin = lineOrigin;
   mode7Map = map;
   mode7Lines = lines;
+  mode7Tile0 = tile0;
+  mode7Window = colorWindow;
 }
 
 auto OpenGL::outputMode7() -> bool {
@@ -100,6 +102,8 @@ auto OpenGL::outputMode7() -> bool {
 
   if(!mode7MapTex) glGenTextures(1, &mode7MapTex);
   if(!mode7LineTex) glGenTextures(1, &mode7LineTex);
+  if(!mode7Tile0Tex) glGenTextures(1, &mode7Tile0Tex);
+  if(!mode7WindowTex) glGenTextures(1, &mode7WindowTex);
 
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, mode7MapTex);
@@ -108,7 +112,17 @@ auto OpenGL::outputMode7() -> bool {
 
   glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, mode7LineTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 240, 0, GL_RGBA, GL_FLOAT, mode7Lines);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 6, 240, 0, GL_RGBA, GL_FLOAT, mode7Lines);
+  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, mode7Tile0Tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Tile0 ? mode7Tile0 : mode7Map);
+  glrParameters(GL_NEAREST, GL_REPEAT);
+
+  glActiveTexture(GL_TEXTURE4);
+  glBindTexture(GL_TEXTURE_2D, mode7WindowTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 240, 0, GL_RED, GL_UNSIGNED_BYTE, mode7Window);
   glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
 
   glActiveTexture(GL_TEXTURE0);
@@ -122,6 +136,8 @@ auto OpenGL::outputMode7() -> bool {
   glrUniform1i("source[0]", 0);
   glrUniform1i("mode7Map", 1);
   glrUniform1i("mode7Lines", 2);
+  glrUniform1i("mode7Tile0", 3);
+  glrUniform1i("mode7Window", 4);
   glrUniform1i("ss", (GLint)mode7Ss);
   glrUniform1f("lineOrigin", mode7LineOrigin);
   float sw = width ? width : 1, sh = height ? height : 1;
@@ -271,6 +287,8 @@ auto OpenGL::terminate() -> void {
   if(mode7Program) { glDeleteProgram(mode7Program); mode7Program = 0; }
   if(mode7MapTex) { glDeleteTextures(1, &mode7MapTex); mode7MapTex = 0; }
   if(mode7LineTex) { glDeleteTextures(1, &mode7LineTex); mode7LineTex = 0; }
+  if(mode7Tile0Tex) { glDeleteTextures(1, &mode7Tile0Tex); mode7Tile0Tex = 0; }
+  if(mode7WindowTex) { glDeleteTextures(1, &mode7WindowTex); mode7WindowTex = 0; }
   if(buffer) { delete[] buffer; buffer = nullptr; }
   initialized = false;
 }

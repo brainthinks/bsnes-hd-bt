@@ -10,6 +10,9 @@ auto Program::load() -> void {
   emulator->configure("Hacks/PPU/HD", settings.emulator.hack.ppu.hd);
   emulator->configure("Hacks/PPU/Deinterlace", settings.emulator.hack.ppu.deinterlace);
   emulator->configure("Hacks/PPU/NoSpriteLimit", settings.emulator.hack.ppu.noSpriteLimit);
+  emulator->configure("Hacks/PPU/HD-Deinterlace", settings.emulator.hack.ppu.hdDeinterlace);
+  emulator->configure("Hacks/PPU/HD-NoSpriteLimit", settings.emulator.hack.ppu.hdNoSpriteLimit);
+  emulator->configure("Hacks/PPU/HD-TrueColor", settings.emulator.hack.ppu.hdTrueColor);
   emulator->configure("Hacks/PPU/NoVRAMBlocking", settings.emulator.hack.ppu.noVRAMBlocking);
   emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);
   emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
@@ -328,9 +331,62 @@ auto Program::power() -> void {
   showMessage("Power cycle");
 }
 
+auto Program::videoSupportsHdGpu() const -> bool {
+  return video.driver() == "OpenGL 3.2";
+}
+
+auto Program::selectFastPpuDueToDriver(Window parent) -> void {
+  MessageDialog({
+    "Error: the ", video.driver(), " video driver does not support HD PPU.\n"
+    "GPU sampling requires OpenGL 3.2.\n"
+    "The Fast PPU has been selected."
+  }).setAlignment(parent).error();
+
+  settings.emulator.hack.ppu.hd = false;
+  settings.emulator.hack.ppu.fast = true;
+  settings.save();
+
+  enhancementSettings.loadingMode7 = true;
+  enhancementSettings.ppuRenderer.item(1).setSelected();
+  enhancementSettings.loadingMode7 = false;
+  enhancementSettings.reloadMode7Widgets();
+
+  if(emulator->loaded() && ppuRendererActive == 2) {
+    serializer s = emulator->serialize();
+    hackCompatibility();
+    bool restored = emulator->unserialize(s);
+    if(!restored) {
+      hackCompatibility();
+      emulator->power();
+    }
+    ppuRendererActive = 1;
+    rewindReset();
+    showMessage(restored ? "PPU renderer applied" : "PPU renderer applied (game restarted)");
+  } else {
+    ppuRendererActive = 1;
+    emulator->configure("Hacks/PPU/Fast", true);
+    emulator->configure("Hacks/PPU/HD", false);
+  }
+  enhancementSettings.ppuRendererChanged();
+}
+
 auto Program::applyPPURenderer(Window parent) -> void {
   uint selected = 1;
   if(auto item = enhancementSettings.ppuRenderer.selected()) selected = item.offset();
+
+  if(selected == 2 && settings.emulator.hack.ppu.hdMode7.gpuSupersample && !videoSupportsHdGpu()) {
+    MessageDialog({
+      "Error: the ", video.driver(), " video driver does not support HD PPU.\n"
+      "GPU sampling requires OpenGL 3.2.\n"
+      "HD was not applied."
+    }).setAlignment(parent).error();
+    enhancementSettings.loadingMode7 = true;
+    enhancementSettings.ppuRenderer.item(ppuRendererActive).setSelected();
+    enhancementSettings.loadingMode7 = false;
+    enhancementSettings.ppuRendererChanged();
+    return;
+  }
+
   settings.emulator.hack.ppu.fast = selected == 1;
   settings.emulator.hack.ppu.hd = selected == 2;
 

@@ -92,18 +92,33 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
     y_b = 255 - y_b;
   }
 
-  if(ppu.gpuSupersample() && this->y < 240) {
+  if(ppu.gpuSupersample() && this->y < 240 && !extbg) {
     ppu.gpuMode7.active = true;
     ppu.gpuMode7.ss = ppu.gpuSsFactor();
-    float* p = ppu.gpuMode7.lines + this->y * 16;
+    float* p = ppu.gpuMode7.lines + this->y * 24;
     p[ 0] = a_a; p[ 1] = b_a; p[ 2] = c_a; p[ 3] = d_a;
     p[ 4] = a_b; p[ 5] = b_b; p[ 6] = c_b; p[ 7] = d_b;
     p[ 8] = (float)y_a; p[ 9] = (float)y_b;
     p[10] = (float)hcenter; p[11] = (float)vcenter;
     p[12] = (float)((hoffset - hcenter) % 1024);
     p[13] = (float)((voffset - vcenter) % 1024);
-    p[14] = io.mode7.hflip ? 1.0f : 0.0f;
-    p[15] = (io.mode7.vflip ? 1.0f : 0.0f) + 2.0f;  // +2 marks a real Mode 7 line
+    uint repeat = (uint)io.mode7.repeat & 3;
+    p[14] = (io.mode7.hflip ? 1.0f : 0.0f) + 2.0f * (float)repeat;
+    p[15] = (io.mode7.vflip ? 1.0f : 0.0f) + 2.0f;
+    uint32 fc = decode(io.col.fixedColor);
+    uint32 bc = decode(cgram[0]);
+    p[16] = HDMode7::mathFlags(io.col.enable[Source::BG1], io.col.mathMode, io.col.halve, io.col.blendMode);
+    HDMode7::rgbFromPacked(fc, p + 17);
+    HDMode7::rgbFromPacked(bc, p + 20);
+    p[23] = io.bg1.belowEnable ? 1.0f : 0.0f;
+    bool mathWin[256];
+    bool aboveWin[256];
+    renderWindow(io.col.window, io.col.window.belowMask, mathWin);
+    renderWindow(io.col.window, io.col.window.aboveMask, aboveWin);
+    uint8* win = ppu.gpuMode7.colorWindow + this->y * 256;
+    for(uint x : range(256)) {
+      win[x] = HDMode7::colorWindowBits(mathWin[x], aboveWin[x]);
+    }
   }
 
   bool windowAbove[256];
@@ -184,6 +199,12 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
             uint32 color = (sampTmp[p + 1] / div) << 16
                          | (sampTmp[p + 2] / div) <<  8
                          | (sampTmp[p + 3] / div) <<  0;
+            if(!ppu.hdTrueColor()) {
+              uint r = (color >>  0 & 255) * 31 / 255;
+              uint g = (color >>  8 & 255) * 31 / 255;
+              uint b = (color >> 16 & 255) * 31 / 255;
+              color = b * 255 / 31 << 16 | g * 255 / 31 << 8 | r * 255 / 31;
+            }
             if(!skip && doAbove && (!extbg || priority > above->priority)) *above = {source, priority, color};
             if(!skip && doBelow && (!extbg || priority > below->priority)) *below = {source, priority, color};
             above++;

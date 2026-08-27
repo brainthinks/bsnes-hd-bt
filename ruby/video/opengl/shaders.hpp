@@ -96,6 +96,8 @@ static string OpenGLMode7FragmentShader = R"(
   uniform sampler2D source[1];
   uniform sampler2D mode7Map;
   uniform sampler2D mode7Lines;
+  uniform sampler2D mode7Tile0;
+  uniform sampler2D mode7Window;
   uniform int ss;
   uniform float lineOrigin;
   uniform vec4 sourceSize;
@@ -119,6 +121,28 @@ static string OpenGLMode7FragmentShader = R"(
     return va + (vb - va) / d * (pr - pa);
   }
 
+  vec3 applyMath(vec3 rgb, int yLine, int wx) {
+    vec4 math = texelFetch(mode7Lines, ivec2(4, yLine), 0);
+    vec4 back = texelFetch(mode7Lines, ivec2(5, yLine), 0);
+    int flags = int(math.x + 0.5);
+    int wbits = int(texelFetch(mode7Window, ivec2(wx, yLine), 0).r * 255.0 + 0.5);
+    bool mathWin = (wbits & 1) != 0;
+    bool aboveWin = (wbits & 2) != 0;
+    if(!aboveWin) rgb = vec3(0.0);
+    if((flags & 1) != 0 && mathWin) {
+      vec3 fx = math.yzw;
+      bool halve = (flags & 4) != 0 && aboveWin && (flags & 8) == 0;
+      if((flags & 8) != 0 && back.w > 0.5) {
+        fx = rgb;
+        halve = (flags & 4) != 0 && aboveWin;
+      }
+      if((flags & 2) != 0) rgb = max(rgb - fx, 0.0);
+      else rgb = min(rgb + fx, 1.0);
+      if(halve) rgb *= 0.5;
+    }
+    return rgb;
+  }
+
   vec4 sampleM7(vec2 snes) {
     int y = int(clamp(snes.y, 0.0, 239.0));
     vec4 aa = texelFetch(mode7Lines, ivec2(0, y), 0);
@@ -131,26 +155,54 @@ static string OpenGLMode7FragmentShader = R"(
     float yb = lp.y;
     float yf = snes.y - 0.5;
     if(of.w > 2.5) yf = 255.0 - yf;
-    float a = rec(ilerp(ya, rec(aa.x), yb, rec(ab.x), yf));
-    float b = rec(ilerp(ya, rec(aa.y), yb, rec(ab.y), yf));
-    float c = rec(ilerp(ya, rec(aa.z), yb, rec(ab.z), yf));
-    float d = rec(ilerp(ya, rec(aa.w), yb, rec(ab.w), yf));
+    float matA = rec(ilerp(ya, rec(aa.x), yb, rec(ab.x), yf));
+    float matB = rec(ilerp(ya, rec(aa.y), yb, rec(ab.y), yf));
+    float matC = rec(ilerp(ya, rec(aa.z), yb, rec(ab.z), yf));
+    float matD = rec(ilerp(ya, rec(aa.w), yb, rec(ab.w), yf));
+    int packBits = int(of.z + 0.5);
     float xf = snes.x - 0.5;
-    if(of.z > 0.5) xf = 255.0 - xf;
+    if((packBits & 1) != 0) xf = 255.0 - xf;
+    int repeatMode = (packBits / 2) & 3;
     float hcenter = lp.z;
     float vcenter = lp.w;
     float ht = of.x;
     float vty = of.y + yf;
-    float originX = a * ht + b * vty + hcenter * 256.0;
-    float originY = c * ht + d * vty + vcenter * 256.0;
-    vec2 uv = vec2(originX + a * xf, originY + c * xf) / 256.0;
+    float originX = matA * ht + matB * vty + hcenter * 256.0;
+    float originY = matC * ht + matD * vty + vcenter * 256.0;
+    vec2 uv = vec2(originX + matA * xf, originY + matC * xf) / 256.0;
     ivec2 ip = ivec2(uv);
-    ip &= 1023;
-    return texelFetch(mode7Map, ip, 0);
+    bool oob = ip.x < 0 || ip.x > 1023 || ip.y < 0 || ip.y > 1023;
+    vec4 texel = vec4(0.0);
+    if(oob) {
+      if(repeatMode == 2) return vec4(0.0);
+      if(repeatMode == 3) {
+        texel = texelFetch(mode7Tile0, ivec2(ip.x & 7, ip.y & 7), 0);
+      } else {
+        ip = ivec2(ip.x & 1023, ip.y & 1023);
+        texel = texelFetch(mode7Map, ip, 0);
+      }
+    } else {
+      texel = texelFetch(mode7Map, ip, 0);
+    }
+    if(texel.a < 0.5) return vec4(0.0);
+
+    int wx = int(clamp(snes.x, 0.0, 255.0));
+    int y1 = min(y + 1, 239);
+    float fy = clamp(snes.y - float(y), 0.0, 1.0);
+    vec3 rgb = mix(applyMath(texel.rgb, y, wx), applyMath(texel.rgb, y1, wx), fy);
+    return vec4(rgb, 1.0);
   }
 
   void main() {
     vec4 spr = texture(source[0], texCoord);
+    if(spr.a > 0.75) {
+      fragColor = spr;
+      return;
+    }
+    if(spr.a > 0.25) {
+      fragColor = vec4(spr.rgb, 1.0);
+      return;
+    }
     float scale = max(sourceSize.x / 256.0, 1.0);
     float snesH = sourceSize.y / scale;
     vec2 snes = vec2(texCoord.x * 256.0, lineOrigin + texCoord.y * snesH);
@@ -168,6 +220,6 @@ static string OpenGLMode7FragmentShader = R"(
     acc /= float(n * n);
     vec4 dest = vec4(spr.rgb, 1.0);
     dest = mix(dest, acc, acc.a);
-    fragColor = mix(dest, spr, spr.a);
+    fragColor = dest;
   }
 )";

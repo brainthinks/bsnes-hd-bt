@@ -183,6 +183,11 @@ auto DriverSettings::videoDriverChange() -> void {
     settings.general.crashed = false;
     settings.save();
     videoDriverChanged();
+    if(settings.emulator.hack.ppu.hd
+    && settings.emulator.hack.ppu.hdMode7.gpuSupersample
+    && !program.videoSupportsHdGpu()) {
+      program.selectFastPpuDueToDriver(settingsWindow);
+    }
   }
 }
 

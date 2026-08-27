@@ -349,6 +349,8 @@ auto Interface::gpuMode7() const -> Emulator::Interface::GpuMode7 {
     result.overscan = ppuhd.latch.overscan;
     result.map = ppuhd.gpuMode7.map;
     result.lines = ppuhd.gpuMode7.lines;
+    result.tile0 = ppuhd.gpuMode7.tile0;
+    result.colorWindow = ppuhd.gpuMode7.colorWindow;
   }
   return result;
 }

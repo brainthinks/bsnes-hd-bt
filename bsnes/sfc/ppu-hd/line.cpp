@@ -68,7 +68,8 @@ auto PPU::Line::flush() -> void {
 
   if(Line::count) {
     ppu.gpuMode7.active = false;
-    memory::fill<float>(ppu.gpuMode7.lines, 240 * 16);
+    memory::fill<float>(ppu.gpuMode7.lines, 240 * 24);
+    memory::fill<uint8>(ppu.gpuMode7.colorWindow, 240 * 256);
     if(ppu.hdScale() > 1) cacheMode7HD();
     #pragma omp parallel for if(Line::count >= 8)
     for(uint y = 0; y < Line::count; y++) {
@@ -89,6 +90,28 @@ auto PPU::Line::flush() -> void {
     Line::start = 0;
     Line::count = 0;
     if(ppu.gpuMode7.active) ppu.prepareGpuMode7();
+    if(auto path = getenv("BSNES_DUMP_MATH")) {
+      static bool dumped = false;
+      if(!dumped && ppu.gpuMode7.active) {
+        dumped = true;
+        if(auto fp = fopen(path, "w")) {
+          fprintf(fp, "ss=%u trueColor=%d active=1\n", ppu.gpuMode7.ss, (int)ppu.hdTrueColor());
+          for(uint y : range(240)) {
+            float* p = ppu.gpuMode7.lines + y * 24;
+            if(p[15] < 1.5f) continue;
+            uint8* w = ppu.gpuMode7.colorWindow + y * 256;
+            uint mathN = 0, aboveN = 0;
+            for(uint x : range(256)) {
+              if(w[x] & 1) mathN++;
+              if(w[x] & 2) aboveN++;
+            }
+            fprintf(fp, "y=%u pack=%.0f valid=%.0f math=%.0f fx=%.3f,%.3f,%.3f bd=%.3f,%.3f,%.3f sub=%.0f winMath=%u winAbove=%u\n",
+              y, p[14], p[15], p[16], p[17], p[18], p[19], p[20], p[21], p[22], p[23], mathN, aboveN);
+          }
+          fclose(fp);
+        }
+      }
+    }
   }
 }
 
@@ -153,7 +176,8 @@ auto PPU::Line::render(bool fieldID) -> void {
     if(ppu.gpuSupersample()) {
       uint8 src = above[x].source;
       if(src == Source::OBJ1 || src == Source::OBJ2) color |= 0xff000000u;
-      else color &= 0x00ffffffu;
+      else if(src == Source::BG1) color &= 0x00ffffffu;          // GPU replaces Mode 7
+      else color = (color & 0x00ffffffu) | 0x80000000u;         // keep CPU (EXTBG, backdrop, windows)
     }
     *output++ = color;
   } else if(width == 256) for(uint x : range(256)) {
@@ -184,6 +208,32 @@ auto PPU::Line::pixel(uint x, Pixel above, Pixel below) const -> uint32 {
 }
 
 auto PPU::Line::blend(uint x, uint y, bool halve) const -> uint32 {
+  if(!ppu.hdTrueColor()) {
+    uint16 a = uint16(x >> 0 & 255) >> 3 | uint16(x >> 8 & 255) >> 3 << 5 | uint16(x >> 16 & 255) >> 3 << 10;
+    uint16 b = uint16(y >> 0 & 255) >> 3 | uint16(y >> 8 & 255) >> 3 << 5 | uint16(y >> 16 & 255) >> 3 << 10;
+    uint16 out;
+    if(!io.col.mathMode) {
+      if(!halve) {
+        uint sum = a + b;
+        uint carry = (sum - ((a ^ b) & 0x0421)) & 0x8420;
+        out = (sum - carry) | (carry - (carry >> 5));
+      } else {
+        out = (a + b - ((a ^ b) & 0x0421)) >> 1;
+      }
+    } else {
+      uint diff = a - b + 0x8420;
+      uint borrow = (diff - ((a ^ b) & 0x8420)) & 0x8420;
+      if(!halve) {
+        out = (diff - borrow) & (borrow - (borrow >> 5));
+      } else {
+        out = (((diff - borrow) & (borrow - (borrow >> 5))) & 0x7bde) >> 1;
+      }
+    }
+    uint r = (out >>  0 & 31) * 255 / 31;
+    uint g = (out >>  5 & 31) * 255 / 31;
+    uint b8 = (out >> 10 & 31) * 255 / 31;
+    return b8 << 16 | g << 8 | r;
+  }
   if(!io.col.mathMode) {  //add
     if(!halve) {
       uint sum = x + y;
@@ -206,7 +256,12 @@ auto PPU::Line::blend(uint x, uint y, bool halve) const -> uint32 {
 auto PPU::Line::decode(uint15 color) const -> uint32 {
   auto table = ppu.lightTable[io.displayBrightness];
   if(!table) return 0;
-  return table[color & 0x7fff];
+  uint32 c = table[color & 0x7fff];
+  if(ppu.hdTrueColor()) return c;
+  uint r = (c >>  0 & 255) * 31 / 255;
+  uint g = (c >>  8 & 255) * 31 / 255;
+  uint b = (c >> 16 & 255) * 31 / 255;
+  return b * 255 / 31 << 16 | g * 255 / 31 << 8 | r * 255 / 31;
 }
 
 auto PPU::Line::directColor(uint paletteIndex, uint paletteColor) const -> uint16 {

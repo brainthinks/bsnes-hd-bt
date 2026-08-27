@@ -111,6 +111,8 @@ struct Interface {
     bool overscan = false;
     const uint32_t* map = nullptr;
     const float* lines = nullptr;
+    const uint32_t* tile0 = nullptr;
+    const uint8_t* colorWindow = nullptr;
   };
   virtual auto gpuMode7() const -> GpuMode7 { return {}; }
 };

@@ -52,6 +52,8 @@ auto EnhancementSettings::create() -> void {
   }).doChange();
 
   overclockingSpacer.setColor({192, 192, 192});
+  dspSpacer.setColor({192, 192, 192});
+  coprocessorHeaderSpacer.setColor({192, 192, 192});
 
   ppuLabel.setText("PPU (video)").setFont(Font().setBold());
   auto updateScanlineOptions = [&] {
@@ -63,7 +65,7 @@ auto EnhancementSettings::create() -> void {
   ppuRendererLabel.setText("Renderer:");
   ppuRenderer.append(ComboButtonItem().setText("Accurate"));
   ppuRenderer.append(ComboButtonItem().setText("Fast"));
-  ppuRenderer.append(ComboButtonItem().setText("HD (24-bit color)"));
+  ppuRenderer.append(ComboButtonItem().setText("HD"));
   {
     uint index = 1;
     if(settings.emulator.hack.ppu.hd) index = 2;
@@ -91,15 +93,43 @@ auto EnhancementSettings::create() -> void {
   });
   ppuRendererUpdate.setText("Change").onActivate([&] { ppuRendererChange(); });
   updateScanlineOptions();
-  deinterlace.setText("Deinterlace").setChecked(settings.emulator.hack.ppu.deinterlace).onToggle([&] {
-    settings.emulator.hack.ppu.deinterlace = deinterlace.checked();
-    emulator->configure("Hacks/PPU/Deinterlace", settings.emulator.hack.ppu.deinterlace);
+  deinterlace.setText("Deinterlace").onToggle([&] {
+    if(loadingMode7) return;
+    if(settings.emulator.hack.ppu.hd) {
+      settings.emulator.hack.ppu.hdDeinterlace = deinterlace.checked();
+      emulator->configure("Hacks/PPU/HD-Deinterlace", settings.emulator.hack.ppu.hdDeinterlace);
+    } else {
+      settings.emulator.hack.ppu.deinterlace = deinterlace.checked();
+      emulator->configure("Hacks/PPU/Deinterlace", settings.emulator.hack.ppu.deinterlace);
+    }
   });
-  noSpriteLimit.setText("No sprite limit").setChecked(settings.emulator.hack.ppu.noSpriteLimit).onToggle([&] {
-    settings.emulator.hack.ppu.noSpriteLimit = noSpriteLimit.checked();
+  noSpriteLimit.setText("No sprite limit").onToggle([&] {
+    if(loadingMode7) return;
+    if(settings.emulator.hack.ppu.hd) {
+      settings.emulator.hack.ppu.hdNoSpriteLimit = noSpriteLimit.checked();
+      emulator->configure("Hacks/PPU/HD-NoSpriteLimit", settings.emulator.hack.ppu.hdNoSpriteLimit);
+    } else {
+      settings.emulator.hack.ppu.noSpriteLimit = noSpriteLimit.checked();
+    }
+  });
+  hdTrueColor.setCollapsible();
+  hdTrueColor.setText("24-bit color").setToolTip(
+    "When enabled, HD blends in 8-bit per channel.\n"
+    "When disabled, color math matches the 15-bit CGRAM path (more banding)."
+  ).onToggle([&] {
+    if(loadingMode7) return;
+    settings.emulator.hack.ppu.hdTrueColor = hdTrueColor.checked();
+    emulator->configure("Hacks/PPU/HD-TrueColor", settings.emulator.hack.ppu.hdTrueColor);
   });
 
   mode7Label.setText("HD Mode 7").setFont(Font().setBold());
+  mode7SamplerLabel.setCollapsible();
+  mode7Sampler.setCollapsible();
+  mode7SsFactorLabel.setCollapsible();
+  mode7SsFactor.setCollapsible();
+  mode7Perspective.setCollapsible();
+  mode7Supersample.setCollapsible();
+  mode7Mosaic.setCollapsible();
   mode7ScaleLabel.setText("Scale:");
   mode7Scale.append(ComboButtonItem().setText( "240p").setAttribute("multiplier", 1));
   mode7Scale.append(ComboButtonItem().setText( "480p").setAttribute("multiplier", 2));
@@ -141,13 +171,29 @@ auto EnhancementSettings::create() -> void {
       emulator->configure(mode7Path("Supersample"), m7.supersample);
     }
   });
-  mode7GpuSupersample.setText("GPU supersampling").setToolTip(
-    "Offload Mode 7 extra samples to OpenGL. Requires the OpenGL 3.2 video driver.\n"
-    "The CPU Mode 7 sampler is unchanged; it only skips extra samples when this is on."
-  ).onToggle([&] {
+  mode7SamplerLabel.setText("Sampler:");
+  mode7Sampler.append(ComboButtonItem().setText("CPU"));
+  mode7Sampler.append(ComboButtonItem().setText("GPU"));
+  mode7Sampler.setToolTip(
+    "CPU: extra Mode 7 samples on the CPU.\n"
+    "GPU: extra Mode 7 samples on OpenGL 3.2 (required). Default."
+  );
+  mode7Sampler.onChange([&] {
     if(loadingMode7) return;
-    settings.emulator.hack.ppu.hdMode7.gpuSupersample = mode7GpuSupersample.checked();
-    emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", settings.emulator.hack.ppu.hdMode7.gpuSupersample);
+    bool gpu = false;
+    if(auto item = mode7Sampler.selected()) gpu = item.offset() == 1;
+    if(gpu && settings.emulator.hack.ppu.hd && !program.videoSupportsHdGpu()) {
+      MessageDialog({
+        "Error: the ", video.driver(), " video driver does not support HD PPU.\n"
+        "GPU sampling requires OpenGL 3.2."
+      }).setAlignment(*settingsWindow).error();
+      loadingMode7 = true;
+      mode7Sampler.item(0).setSelected();
+      loadingMode7 = false;
+      gpu = false;
+    }
+    settings.emulator.hack.ppu.hdMode7.gpuSupersample = gpu;
+    emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", gpu);
   });
   mode7Mosaic.setText("HD->SD Mosaic").onToggle([&] {
     if(loadingMode7) return;
@@ -208,8 +254,9 @@ auto EnhancementSettings::reloadMode7Widgets() -> void {
   mode7Supersample.setVisible(!hd);
   mode7SsFactorLabel.setVisible(hd);
   mode7SsFactor.setVisible(hd);
-  mode7GpuSupersample.setVisible(hd);
-  mode7GpuSupersample.setChecked(settings.emulator.hack.ppu.hdMode7.gpuSupersample);
+  mode7SamplerLabel.setVisible(hd);
+  mode7Sampler.setVisible(hd);
+  mode7Sampler.item(settings.emulator.hack.ppu.hdMode7.gpuSupersample ? 1 : 0).setSelected();
   mode7Mosaic.setVisible(!hd);
   uint factor = m7.ssFactor < 1 ? 1 : m7.ssFactor;
   for(uint n : range(mode7SsFactor.itemCount())) {
@@ -218,12 +265,22 @@ auto EnhancementSettings::reloadMode7Widgets() -> void {
     }
   }
   mode7Label.setText(hd ? "HD Mode 7 (HD PPU)" : "HD Mode 7 (Fast PPU)");
+  deinterlace.setChecked(hd ? settings.emulator.hack.ppu.hdDeinterlace : settings.emulator.hack.ppu.deinterlace);
+  noSpriteLimit.setChecked(hd ? settings.emulator.hack.ppu.hdNoSpriteLimit : settings.emulator.hack.ppu.noSpriteLimit);
+  hdTrueColor.setVisible(hd);
+  hdTrueColor.setChecked(settings.emulator.hack.ppu.hdTrueColor);
+  bool scanline = settings.emulator.hack.ppu.fast || settings.emulator.hack.ppu.hd;
+  deinterlace.setEnabled(scanline);
+  noSpriteLimit.setEnabled(scanline);
+  mode7Layout.setEnabled(scanline);
+  ppuScanlineLayout.resize();
   loadingMode7 = false;
+  mode7Layout.resize();
 }
 
 auto EnhancementSettings::ppuRendererChanged() -> void {
   string name = "Fast";
-  if(program.ppuRendererActive == 2) name = "HD (24-bit color)";
+  if(program.ppuRendererActive == 2) name = "HD";
   else if(program.ppuRendererActive == 0) name = "Accurate";
   ppuRendererActiveLabel.setText({"Active renderer: ", name});
   uint selected = program.ppuRendererActive;

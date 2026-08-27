@@ -113,6 +113,9 @@ struct Settings : Markup::Node {
         bool deinterlace = true;
         bool noSpriteLimit = false;
         bool noVRAMBlocking = false;
+        bool hdDeinterlace = true;
+        bool hdNoSpriteLimit = true;
+        bool hdTrueColor = true;
         struct Mode7 {
           uint scale = 1;
           bool perspective = true;
@@ -120,7 +123,7 @@ struct Settings : Markup::Node {
           uint ssFactor = 1;
           bool mosaic = true;
           bool gpuSupersample = false;
-        } mode7, hdMode7{5, true, true, 4, false, false};
+        } mode7, hdMode7{5, true, true, 4, false, true};
       } ppu;
       struct DSP {
         bool fast = true;
@@ -373,25 +376,30 @@ public:
     ComboButton ppuRenderer{&ppuLayout, Size{0, 0}};
     Button ppuRendererUpdate{&ppuLayout, Size{0, 0}};
     Label ppuRendererActiveLabel{&ppuLayout, Size{0, 0}};
-    CheckLabel deinterlace{&ppuLayout, Size{0, 0}};
-    CheckLabel noSpriteLimit{&ppuLayout, Size{0, 0}};
+  HorizontalLayout ppuScanlineLayout{this, Size{~0, 0}};
+    CheckLabel deinterlace{&ppuScanlineLayout, Size{0, 0}};
+    CheckLabel noSpriteLimit{&ppuScanlineLayout, Size{0, 0}};
+    CheckLabel hdTrueColor{&ppuScanlineLayout, Size{0, 0}};
   //
   Label mode7Label{this, Size{~0, 0}, 2};
   HorizontalLayout mode7Layout{this, Size{~0, 0}};
     Label mode7ScaleLabel{&mode7Layout, Size{0, 0}};
     ComboButton mode7Scale{&mode7Layout, Size{0, 0}};
-    CheckLabel mode7Perspective{&mode7Layout, Size{0, 0}};
-    CheckLabel mode7Supersample{&mode7Layout, Size{0, 0}};
+    Label mode7SamplerLabel{&mode7Layout, Size{0, 0}};
+    ComboButton mode7Sampler{&mode7Layout, Size{0, 0}};
     Label mode7SsFactorLabel{&mode7Layout, Size{0, 0}};
     ComboButton mode7SsFactor{&mode7Layout, Size{0, 0}};
-    CheckLabel mode7GpuSupersample{&mode7Layout, Size{0, 0}};
+    CheckLabel mode7Perspective{&mode7Layout, Size{0, 0}};
+    CheckLabel mode7Supersample{&mode7Layout, Size{0, 0}};
     CheckLabel mode7Mosaic{&mode7Layout, Size{0, 0}};
   //
+  Canvas dspSpacer{this, Size{~0, 1}};
   Label dspLabel{this, Size{~0, 0}, 2};
   HorizontalLayout dspLayout{this, Size{~0, 0}};
     CheckLabel fastDSP{&dspLayout, Size{0, 0}};
     CheckLabel cubicInterpolation{&dspLayout, Size{0, 0}};
   //
+  Canvas coprocessorHeaderSpacer{this, Size{~0, 1}};
   Label coprocessorLabel{this, Size{~0, 0}, 2};
   HorizontalLayout coprocessorLayout{this, Size{~0, 0}};
     CheckLabel coprocessorDelayedSyncOption{&coprocessorLayout, Size{0, 0}};

@@ -20,6 +20,7 @@ struct PPU : PPUcounter {
   alwaysinline auto gpuSupersample() const -> bool;
   alwaysinline auto gpuSsFactor() const -> uint;
   alwaysinline auto hdMosaic() const -> bool;
+  alwaysinline auto hdTrueColor() const -> bool;
   alwaysinline auto deinterlace() const -> bool;
   alwaysinline auto renderCycle() const -> uint;
   alwaysinline auto noVRAMBlocking() const -> bool;
@@ -374,7 +375,9 @@ public:
     bool active = false;
     uint ss = 1;
     uint32 map[1024 * 1024];
-    float lines[240 * 16];
+    uint32 tile0[64];
+    uint8 colorWindow[240 * 256];
+    float lines[240 * 24];
   } gpuMode7;
   auto prepareGpuMode7() -> void;
 };

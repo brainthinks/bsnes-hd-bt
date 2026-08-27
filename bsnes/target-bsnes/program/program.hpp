@@ -27,6 +27,8 @@ struct Program : Lock, Emulator::Platform {
   auto reset() -> void;
   auto power() -> void;
   auto applyPPURenderer(Window parent) -> void;
+  auto videoSupportsHdGpu() const -> bool;
+  auto selectFastPpuDueToDriver(Window parent) -> void;
   uint ppuRendererActive = 1;
   auto unload() -> void;
   auto verified() const -> bool;

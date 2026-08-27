@@ -66,6 +66,16 @@ auto Program::create() -> void {
   driverSettings.audioDriverChanged();
   driverSettings.inputDriverChanged();
 
+  if(settings.emulator.hack.ppu.hd
+  && settings.emulator.hack.ppu.hdMode7.gpuSupersample
+  && !videoSupportsHdGpu()) {
+    selectFastPpuDueToDriver(presentation);
+  } else {
+    ppuRendererActive = settings.emulator.hack.ppu.hd ? 2
+      : settings.emulator.hack.ppu.fast ? 1 : 0;
+    enhancementSettings.ppuRendererChanged();
+  }
+
   if(gameQueue) load();
   if(startFullScreen && emulator->loaded()) {
     toggleVideoFullScreen();

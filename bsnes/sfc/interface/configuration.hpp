@@ -43,6 +43,9 @@ struct Configuration {
       bool deinterlace = true;
       bool noSpriteLimit = false;
       bool noVRAMBlocking = false;
+      bool hdDeinterlace = true;
+      bool hdNoSpriteLimit = true;
+      bool hdTrueColor = true;
       uint renderCycle = 512;
       struct Mode7 {
         uint scale = 1;
@@ -51,7 +54,7 @@ struct Configuration {
         uint ssFactor = 1;
         bool mosaic = true;
         bool gpuSupersample = false;
-      } mode7, hdMode7{5, true, true, 4, false, false};
+      } mode7, hdMode7{5, true, true, 4, false, true};
     } ppu;
     struct DSP {
       bool fast = true;
