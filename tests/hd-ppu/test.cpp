@@ -162,6 +162,19 @@ static auto testPacking() -> void {
   CHECK(HDMode7::colorWindowBits(true, false) == 1);
   CHECK(HDMode7::colorWindowBits(false, true) == 2);
   CHECK(HDMode7::colorWindowBits(false, false) == 0);
+  CHECK(HDMode7::colorWindowBits(false, false, true) == HDMode7::bg1VisibleBit);
+  CHECK(HDMode7::colorWindowBits(true, true, true) == (3 | HDMode7::bg1VisibleBit));
+  CHECK(HDMode7::bg1VisibleBit == 4);
+
+  std::uint16_t vram[32768] = {};
+  auto h0 = HDMode7::mapContentHash(true, false, vram);
+  vram[16384] = 0x1234;  // OBJ CHR in upper VRAM
+  CHECK(HDMode7::mapContentHash(true, false, vram) == h0);
+  vram[0] = 0xff00;      // Mode 7 character byte (explosion tiles)
+  CHECK(HDMode7::mapContentHash(true, false, vram) == h0);
+  vram[0] = 0x0001;      // tilemap low byte does rebuild
+  CHECK(HDMode7::mapContentHash(true, false, vram) != h0);
+  CHECK(HDMode7::mode7VramWords == 16384);
 
   for(int v = 0; v <= 3; v++) {
     float r = float(v) / 255.0f;
@@ -182,6 +195,13 @@ static auto testShaderSource(const std::string& path) -> void {
   auto frag = extractRString(file, "OpenGLMode7FragmentShader");
   CHECK(!frag.empty());
   CHECK(frag.find("#version 150") != std::string::npos);
+  auto mapVert = extractRString(file, "OpenGLMode7MapVertexShader");
+  auto mapFrag = extractRString(file, "OpenGLMode7MapFragmentShader");
+  CHECK(!mapVert.empty());
+  CHECK(!mapFrag.empty());
+  CHECK(mapFrag.find("mode7Vram") != std::string::npos);
+  CHECK(mapFrag.find("mode7Palette") != std::string::npos);
+  CHECK(mapFrag.find("gl_FragCoord") != std::string::npos);
 
   auto body = stripComments(frag);
   CHECK(!hasIdent(body, "packed"));  // reserved in GLSL; broke GPU SS
@@ -189,6 +209,10 @@ static auto testShaderSource(const std::string& path) -> void {
   CHECK(frag.find("math.yzw") != std::string::npos);
   CHECK(frag.find("mode7Window") != std::string::npos);
   CHECK(frag.find("textureGrad") != std::string::npos);
+  CHECK(frag.find("textureLod") != std::string::npos);
+  CHECK(frag.find("mode7Luma") != std::string::npos);
+  CHECK(frag.find("for(int j = 0; j < n; j++)") != std::string::npos);
+  CHECK(frag.find("j < 16") == std::string::npos);
 
 #ifdef HD_PPU_GL
   static bool tried = false, haveGL = false;
@@ -202,6 +226,10 @@ static auto testShaderSource(const std::string& path) -> void {
     bool ok = compileFragment(frag, log);
     if(!ok) std::fprintf(stderr, "shader log:\n%s\n", log.c_str());
     CHECK(ok);
+    log.clear();
+    bool mapOk = compileFragment(mapFrag, log);
+    if(!mapOk) std::fprintf(stderr, "map shader log:\n%s\n", log.c_str());
+    CHECK(mapOk);
   }
 #else
   std::printf("skip: HD_PPU_GL not built (source checks still ran)\n");

@@ -9,11 +9,11 @@ extern PPU& ppubase;
 #define ppu ppuhd
 
 PPU ppu;
+#include "gpu-mode7.hpp"
 #include "io.cpp"
 #include "line.cpp"
 #include "background.cpp"
 #include "mode7.cpp"
-#include "gpu-mode7.hpp"
 #include "mode7hd.cpp"
 #include "object.cpp"
 #include "window.cpp"
@@ -142,7 +142,9 @@ auto PPU::scanline() -> void {
     latch.hires |= io.pseudoHires || io.bgMode == 5 || io.bgMode == 6;
     // HD PPU always keeps HD output. Official Fast supersampling averages down to 240p;
     // here supersampling is extra samples into the HD framebuffer instead.
-    latch.hd |= io.bgMode == 7 && hdScale() > 1;
+    // GPU Mode 7 samples at the window. Expanding the CPU buffer to HD
+    // scale only nearest-scales sprites and uploads megabytes per frame.
+    latch.hd |= io.bgMode == 7 && hdScale() > 1 && !gpuSupersample();
     latch.ss = false;
   }
 
@@ -224,16 +226,23 @@ auto PPU::refresh() -> void {
 }
 
 auto PPU::prepareGpuMode7() -> void {
-  auto table = lightTable[io.displayBrightness];
-  if(!table) table = lightTable[15];
-  auto pack = [&](uint palette) -> uint32 {
+  gpuMode7.luma = (float)io.displayBrightness / 15.0f;
+  uint64 hash = HDMode7::mapContentHash(
+    hdTrueColor(), io.col.directColor, vram
+  );
+  if(hash == gpuMode7.hash) return;
+  gpuMode7.hash = hash;
+
+  auto table = lightTable[15];
+  if(!table) table = lightTable[io.displayBrightness];
+  for(uint n : range(256)) {
     uint32 color = 0;
-    if(palette && table) {
+    if(n && table) {
       if(io.col.directColor) {
-        uint16 dc = (palette << 2 & 0x001c) + (palette << 4 & 0x0380) + (palette << 7 & 0x6000);
+        uint16 dc = (n << 2 & 0x001c) + (n << 4 & 0x0380) + (n << 7 & 0x6000);
         color = table[dc & 0x7fff];
       } else {
-        color = table[cgram[palette] & 0x7fff];
+        color = table[cgram[n] & 0x7fff];
       }
       if(!hdTrueColor()) {
         uint r = (color >>  0 & 255) * 31 / 255;
@@ -243,21 +252,12 @@ auto PPU::prepareGpuMode7() -> void {
       }
       color |= 0xff000000u;
     }
-    return color;
-  };
-  uint32* map = gpuMode7.map;
-  for(uint py = 0; py < 1024; py++) {
-    for(uint px = 0; px < 1024; px++) {
-      uint tile = vram[(py >> 3 & 127) * 128 + (px >> 3 & 127)] & 0xff;
-      uint palette = vram[(((py & 7) << 3) + (px & 7)) + (tile << 6)] >> 8;
-      *map++ = pack(palette);
-    }
+    gpuMode7.palette[n] = color;
   }
-  uint32* t0 = gpuMode7.tile0;
-  for(uint py = 0; py < 8; py++) {
-    for(uint px = 0; px < 8; px++) {
+  for(uint py : range(8)) {
+    for(uint px : range(8)) {
       uint palette = vram[((py & 7) << 3) + (px & 7)] >> 8;
-      *t0++ = pack(palette);
+      gpuMode7.tile0[py * 8 + px] = gpuMode7.palette[palette];
     }
   }
 }
@@ -268,6 +268,7 @@ auto PPU::load() -> bool {
 
 auto PPU::power(bool reset) -> void {
   PPUcounter::reset();
+  gpuMode7.hash = 0;
   memory::fill<uint32>(output, 1024 * 960);
 
   function<uint8 (uint, uint8)> reader{&PPU::readIO, this};

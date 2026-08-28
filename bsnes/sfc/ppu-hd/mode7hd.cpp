@@ -31,6 +31,53 @@ auto PPU::Line::cacheMode7HD() -> void {
     ppu.mode7LineGroups.endLerpLine[ppu.mode7LineGroups.count] = ppu.mode7LineGroups.endLine[ppu.mode7LineGroups.count] - offset;
     ppu.mode7LineGroups.count++;
   }
+
+  // Fast's check: skip 1/A lerp when A/B/C/D are not monotonic (cylinder, not a floor).
+  for(int i : range(ppu.mode7LineGroups.count)) {
+    int a = -1, b = -1, c = -1, d = -1;
+    int aPrev = -1, bPrev = -1, cPrev = -1, dPrev = -1;
+    bool aVar = false, bVar = false, cVar = false, dVar = false;
+    bool aInc = false, bInc = false, cInc = false, dInc = false;
+    for(uint y = ppu.mode7LineGroups.startLerpLine[i]; y <= (uint)ppu.mode7LineGroups.endLerpLine[i]; y++) {
+      a = (int)(int16)ppu.lines[y].io.mode7.a;
+      b = (int)(int16)ppu.lines[y].io.mode7.b;
+      c = (int)(int16)ppu.lines[y].io.mode7.c;
+      d = (int)(int16)ppu.lines[y].io.mode7.d;
+      if(aPrev > 0 && a > 0 && a != aPrev) {
+        if(!aVar) { aVar = true; aInc = a > aPrev; }
+        else if(aInc != a > aPrev) {
+          ppu.mode7LineGroups.startLerpLine[i] = -1;
+          ppu.mode7LineGroups.endLerpLine[i] = -1;
+          break;
+        }
+      }
+      if(bPrev > 0 && b > 0 && b != bPrev) {
+        if(!bVar) { bVar = true; bInc = b > bPrev; }
+        else if(bInc != b > bPrev) {
+          ppu.mode7LineGroups.startLerpLine[i] = -1;
+          ppu.mode7LineGroups.endLerpLine[i] = -1;
+          break;
+        }
+      }
+      if(cPrev > 0 && c > 0 && c != cPrev) {
+        if(!cVar) { cVar = true; cInc = c > cPrev; }
+        else if(cInc != c > cPrev) {
+          ppu.mode7LineGroups.startLerpLine[i] = -1;
+          ppu.mode7LineGroups.endLerpLine[i] = -1;
+          break;
+        }
+      }
+      if(dPrev > 0 && d > 0 && d != dPrev) {
+        if(!dVar) { dVar = true; dInc = d > dPrev; }
+        else if(dInc != d > dPrev) {
+          ppu.mode7LineGroups.startLerpLine[i] = -1;
+          ppu.mode7LineGroups.endLerpLine[i] = -1;
+          break;
+        }
+      }
+      aPrev = a, bPrev = b, cPrev = c, dPrev = d;
+    }
+  }
 }
 
 auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
@@ -64,7 +111,7 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
       }
     }
   }
-  if(y_a == -1 || y_b == -1 || y_a == y_b) {
+  if(y_a == -1 || y_b == -1) {
     y_a = y;
     y_b = y;
     if(y_a >   1 && isLineMode7(y_a)) y_a--;
@@ -92,6 +139,11 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
     y_b = 255 - y_b;
   }
 
+  bool windowAbove[256];
+  bool windowBelow[256];
+  renderWindow(self.window, self.window.aboveEnable, windowAbove);
+  renderWindow(self.window, self.window.belowEnable, windowBelow);
+
   if(ppu.gpuSupersample() && this->y < 240 && !extbg) {
     ppu.gpuMode7.active = true;
     ppu.gpuMode7.ss = ppu.gpuSsFactor();
@@ -117,14 +169,12 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
     renderWindow(io.col.window, io.col.window.aboveMask, aboveWin);
     uint8* win = ppu.gpuMode7.colorWindow + this->y * 256;
     for(uint x : range(256)) {
-      win[x] = HDMode7::colorWindowBits(mathWin[x], aboveWin[x]);
+      win[x] = HDMode7::colorWindowBits(mathWin[x], aboveWin[x], self.aboveEnable && !windowAbove[x]);
     }
+    // GPU replaces BG1. Sampling Mode 7 at hdScale on the CPU is discarded
+    // (and was still paid at 2× SS). EXTBG BG2 keeps the CPU sampler.
+    return;
   }
-
-  bool windowAbove[256];
-  bool windowBelow[256];
-  renderWindow(self.window, self.window.aboveEnable, windowAbove);
-  renderWindow(self.window, self.window.belowEnable, windowBelow);
 
   int pixelYp = INT_MIN;
   for(int ys : range(scale)) {

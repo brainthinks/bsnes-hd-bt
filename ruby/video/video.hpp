@@ -35,7 +35,7 @@ struct VideoDriver {
   virtual auto release() -> void {}
   virtual auto output(uint width = 0, uint height = 0) -> void {}
   virtual auto poll() -> void {}
-  virtual auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines, const uint32_t* tile0, const uint8_t* colorWindow) -> void {}
+  virtual auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint16_t* vram, const uint32_t* palette, const uint32_t* tile0, const float* lines, const uint8_t* colorWindow, uint64_t mapHash = 0, float luma = 1.0f) -> void {}
 
 protected:
   Video& super;
@@ -126,7 +126,7 @@ struct Video {
   auto release() -> void;
   auto output(uint width = 0, uint height = 0) -> void;
   auto poll() -> void;
-  auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines, const uint32_t* tile0, const uint8_t* colorWindow) -> void;
+  auto setMode7Gpu(bool enable, uint ss = 1, float lineOrigin = 0, const uint16_t* vram = nullptr, const uint32_t* palette = nullptr, const uint32_t* tile0 = nullptr, const float* lines = nullptr, const uint8_t* colorWindow = nullptr, uint64_t mapHash = 0, float luma = 1.0f) -> void;
 
   auto onUpdate(const function<void (uint, uint)>&) -> void;
   auto doUpdate(uint width, uint height) -> void;

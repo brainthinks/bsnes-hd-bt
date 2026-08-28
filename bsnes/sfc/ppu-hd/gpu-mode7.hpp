@@ -13,8 +13,28 @@ inline auto rgbFromPacked(std::uint32_t color00RRGGBB, float out[3]) -> void {
   out[2] = float(color00RRGGBB >>  0 & 255) / 255.0f;
 }
 
-inline auto colorWindowBits(bool mathWin, bool aboveWin) -> std::uint8_t {
-  return std::uint8_t((mathWin ? 1 : 0) | (aboveWin ? 2 : 0));
+// colorWindow byte: bit 0 = color-math window, bit 1 = above window,
+// bit 2 = BG1 is visible (not clip-windowed) so GPU may replace COL.
+constexpr std::uint8_t bg1VisibleBit = 4;
+
+inline auto colorWindowBits(bool mathWin, bool aboveWin, bool bg1Visible = false) -> std::uint8_t {
+  return std::uint8_t((mathWin ? 1 : 0) | (aboveWin ? 2 : 0) | (bg1Visible ? bg1VisibleBit : 0));
+}
+
+// Atlas rebuild is keyed only on the Mode 7 tilemap (low bytes of vram
+// words 0..16383). Character bytes, OBJ CHR, and CGRAM all change during
+// explosions; hashing any of them called glGenerateMipmap every debris
+// frame and stalled a 60 FPS present. Brightness is a shader uniform.
+constexpr std::uint32_t mode7VramWords = 16384;
+
+inline auto mapContentHash(
+  bool trueColor,
+  bool directColor,
+  const std::uint16_t* vram
+) -> std::uint64_t {
+  std::uint64_t hash = (trueColor ? 1u : 0u) | (directColor ? 2u : 0u);
+  for(std::uint32_t n = 0; n < mode7VramWords; n++) hash = hash * 0x100000001b3ull ^ (vram[n] & 0xff);
+  return hash;
 }
 
 inline auto mathFlags(bool enable, bool subtract, bool halve, bool blendMode) -> float {

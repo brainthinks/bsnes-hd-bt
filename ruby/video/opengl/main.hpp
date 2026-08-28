@@ -87,57 +87,127 @@ auto OpenGL::lock(uint32_t*& data, uint& pitch) -> bool {
   return data = buffer;
 }
 
-auto OpenGL::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines, const uint32_t* tile0, const uint8_t* colorWindow) -> void {
+auto OpenGL::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint16_t* vram, const uint32_t* palette, const uint32_t* tile0, const float* lines, const uint8_t* colorWindow, uint64_t mapHash, float luma) -> void {
   mode7Gpu = enable;
   mode7Ss = ss ? ss : 1;
   mode7LineOrigin = lineOrigin;
-  mode7Map = map;
+  mode7Vram = vram;
+  mode7Palette = palette;
   mode7Lines = lines;
   mode7Tile0 = tile0;
   mode7Window = colorWindow;
+  mode7Luma = luma;
+  if(!enable || mapHash != mode7MapHash) {
+    mode7MapHash = mapHash;
+    mode7MapReady = false;
+  }
 }
 
-auto OpenGL::outputMode7() -> bool {
-  if(!mode7Gpu || !mode7Program || !mode7Map || !mode7Lines) return false;
-
-  if(!mode7MapTex) glGenTextures(1, &mode7MapTex);
-  if(!mode7LineTex) glGenTextures(1, &mode7LineTex);
-  if(!mode7Tile0Tex) glGenTextures(1, &mode7Tile0Tex);
-  if(!mode7WindowTex) glGenTextures(1, &mode7WindowTex);
-
-  glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, mode7MapTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1024, 1024, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Map);
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 0.25f);
+#ifndef GL_RG
+#define GL_RG 0x8227
+#endif
+#ifndef GL_RG8
+#define GL_RG8 0x822B
+#endif
 #ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
 #define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
 #define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
 #endif
-  GLfloat aniso = 0.0f;
-  glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &aniso);
-  if(aniso >= 2.0f) {
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso > 8.0f ? 8.0f : aniso);
+
+auto OpenGL::rebuildMode7Map() -> void {
+  if(!mode7MapProgram || !mode7Vram || !mode7Palette) return;
+
+  if(!mode7VramTex) glGenTextures(1, &mode7VramTex);
+  if(!mode7PaletteTex) glGenTextures(1, &mode7PaletteTex);
+
+  glActiveTexture(GL_TEXTURE5);
+  glBindTexture(GL_TEXTURE_2D, mode7VramTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, 128, 128, 0, GL_RG, GL_UNSIGNED_BYTE, mode7Vram);
+  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+
+  glActiveTexture(GL_TEXTURE6);
+  glBindTexture(GL_TEXTURE_2D, mode7PaletteTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Palette);
+  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+
+  if(!mode7MapTex) {
+    glGenTextures(1, &mode7MapTex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, mode7MapTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1024, 1024, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 0.25f);
+    GLfloat aniso = 0.0f;
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &aniso);
+    if(aniso >= 2.0f) {
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso > 8.0f ? 8.0f : aniso);
+    }
+    glGenFramebuffers(1, &mode7MapFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mode7MapFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mode7MapTex, 0);
   }
+
+  GLuint saved = program;
+  program = mode7MapProgram;
+  glUseProgram(mode7MapProgram);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mode7MapFbo);
+  glrUniform1i("mode7Vram", 5);
+  glrUniform1i("mode7Palette", 6);
+  glViewport(0, 0, 1024, 1024);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  program = saved;
+
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, mode7MapTex);
+  glGenerateMipmap(GL_TEXTURE_2D);
+
+  if(!mode7Tile0Tex) glGenTextures(1, &mode7Tile0Tex);
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, mode7Tile0Tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Tile0 ? mode7Tile0 : mode7Palette);
+  glrParameters(GL_NEAREST, GL_REPEAT);
+}
+
+auto OpenGL::outputMode7() -> bool {
+  if(!mode7Gpu || !mode7Program || !mode7MapProgram || !mode7Vram || !mode7Palette || !mode7Lines) return false;
+
+  if(!mode7MapReady) rebuildMode7Map();
+  if(!mode7MapTex) return false;
+  mode7MapReady = true;
+
+  if(!mode7LineTex) {
+    glGenTextures(1, &mode7LineTex);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, mode7LineTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 6, 240, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  }
+  if(!mode7WindowTex) {
+    glGenTextures(1, &mode7WindowTex);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, mode7WindowTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 240, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  }
+
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, mode7MapTex);
 
   glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, mode7LineTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 6, 240, 0, GL_RGBA, GL_FLOAT, mode7Lines);
-  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, mode7Lines);
 
   glActiveTexture(GL_TEXTURE3);
   glBindTexture(GL_TEXTURE_2D, mode7Tile0Tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Tile0 ? mode7Tile0 : mode7Map);
-  glrParameters(GL_NEAREST, GL_REPEAT);
 
   glActiveTexture(GL_TEXTURE4);
   glBindTexture(GL_TEXTURE_2D, mode7WindowTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 240, 0, GL_RED, GL_UNSIGNED_BYTE, mode7Window);
-  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 240, GL_RED, GL_UNSIGNED_BYTE, mode7Window);
 
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture);
@@ -154,6 +224,7 @@ auto OpenGL::outputMode7() -> bool {
   glrUniform1i("mode7Window", 4);
   glrUniform1i("ss", (GLint)mode7Ss);
   glrUniform1f("lineOrigin", mode7LineOrigin);
+  glrUniform1f("mode7Luma", mode7Luma);
   float sw = width ? width : 1, sh = height ? height : 1;
   uint targetWidth = absoluteWidth ? absoluteWidth : (outputWidth ? outputWidth : 1);
   uint targetHeight = absoluteHeight ? absoluteHeight : (outputHeight ? outputHeight : 1);
@@ -288,6 +359,14 @@ auto OpenGL::initialize(const string& shader) -> bool {
   if(mode7Vertex && mode7Fragment) glrLinkProgram(mode7Program);
   else { mode7Program = 0; }
 
+  mode7MapProgram = glCreateProgram();
+  mode7MapVertex = glrCreateShader(mode7MapProgram, GL_VERTEX_SHADER, OpenGLMode7MapVertexShader);
+  mode7MapFragment = glrCreateShader(mode7MapProgram, GL_FRAGMENT_SHADER, OpenGLMode7MapFragmentShader);
+  if(mode7MapVertex && mode7MapFragment) {
+    glBindFragDataLocation(mode7MapProgram, 0, "fragColor");
+    glrLinkProgram(mode7MapProgram);
+  } else { mode7MapProgram = 0; }
+
   setShader(shader);
   return initialized = true;
 }
@@ -299,7 +378,13 @@ auto OpenGL::terminate() -> void {
   if(mode7Fragment) { if(mode7Program) glDetachShader(mode7Program, mode7Fragment); glDeleteShader(mode7Fragment); mode7Fragment = 0; }
   if(mode7Vertex) { if(mode7Program) glDetachShader(mode7Program, mode7Vertex); glDeleteShader(mode7Vertex); mode7Vertex = 0; }
   if(mode7Program) { glDeleteProgram(mode7Program); mode7Program = 0; }
+  if(mode7MapFragment) { if(mode7MapProgram) glDetachShader(mode7MapProgram, mode7MapFragment); glDeleteShader(mode7MapFragment); mode7MapFragment = 0; }
+  if(mode7MapVertex) { if(mode7MapProgram) glDetachShader(mode7MapProgram, mode7MapVertex); glDeleteShader(mode7MapVertex); mode7MapVertex = 0; }
+  if(mode7MapProgram) { glDeleteProgram(mode7MapProgram); mode7MapProgram = 0; }
+  if(mode7MapFbo) { glDeleteFramebuffers(1, &mode7MapFbo); mode7MapFbo = 0; }
   if(mode7MapTex) { glDeleteTextures(1, &mode7MapTex); mode7MapTex = 0; }
+  if(mode7VramTex) { glDeleteTextures(1, &mode7VramTex); mode7VramTex = 0; }
+  if(mode7PaletteTex) { glDeleteTextures(1, &mode7PaletteTex); mode7PaletteTex = 0; }
   if(mode7LineTex) { glDeleteTextures(1, &mode7LineTex); mode7LineTex = 0; }
   if(mode7Tile0Tex) { glDeleteTextures(1, &mode7Tile0Tex); mode7Tile0Tex = 0; }
   if(mode7WindowTex) { glDeleteTextures(1, &mode7WindowTex); mode7WindowTex = 0; }

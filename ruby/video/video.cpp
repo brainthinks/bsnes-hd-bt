@@ -126,8 +126,8 @@ auto Video::poll() -> void {
   return instance->poll();
 }
 
-auto Video::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint32_t* map, const float* lines, const uint32_t* tile0, const uint8_t* colorWindow) -> void {
-  instance->setMode7Gpu(enable, ss, lineOrigin, map, lines, tile0, colorWindow);
+auto Video::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint16_t* vram, const uint32_t* palette, const uint32_t* tile0, const float* lines, const uint8_t* colorWindow, uint64_t mapHash, float luma) -> void {
+  instance->setMode7Gpu(enable, ss, lineOrigin, vram, palette, tile0, lines, colorWindow, mapHash, luma);
 }
 
 //

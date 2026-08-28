@@ -170,18 +170,24 @@ auto PPU::Line::render(bool fieldID) -> void {
   renderWindow(io.col.window, io.col.window.aboveMask, windowAbove);
   renderWindow(io.col.window, io.col.window.belowMask, windowBelow);
 
+  auto tagGpu = [&](uint32 color, uint8 src, uint snesX) -> uint32 {
+    if(!ppu.gpuSupersample()) return color;
+    if(src == Source::OBJ1 || src == Source::OBJ2) return color | 0xff000000u;
+    if(src == Source::BG1) return color & 0x00ffffffu;
+    if(src == Source::COL && ppu.gpuMode7.active
+    && (ppu.gpuMode7.colorWindow[this->y * 256 + snesX] & HDMode7::bg1VisibleBit)) {
+      return color & 0x00ffffffu;
+    }
+    return (color & 0x00ffffffu) | 0x80000000u;
+  };
+
   uint curr = 0, prev = 0;
   if(hd) for(uint x : range(256 * scale * scale)) {
     uint32 color = pixel(x / scale & 255, above[x], below[x]);
-    if(ppu.gpuSupersample()) {
-      uint8 src = above[x].source;
-      if(src == Source::OBJ1 || src == Source::OBJ2) color |= 0xff000000u;
-      else if(src == Source::BG1) color &= 0x00ffffffu;          // GPU replaces Mode 7
-      else color = (color & 0x00ffffffu) | 0x80000000u;         // keep CPU (EXTBG, backdrop, windows)
-    }
-    *output++ = color;
+    *output++ = tagGpu(color, above[x].source, x / scale & 255);
   } else if(width == 256) for(uint x : range(256)) {
-    *output++ = pixel(x, above[x], below[x]);
+    uint32 color = pixel(x, above[x], below[x]);
+    *output++ = tagGpu(color, above[x].source, x);
   } else if(!hires) for(uint x : range(256)) {
     auto color = pixel(x, above[x], below[x]);
     *output++ = color;

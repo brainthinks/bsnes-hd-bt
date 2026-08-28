@@ -374,10 +374,12 @@ public:
   struct GpuMode7 {
     bool active = false;
     uint ss = 1;
-    uint32 map[1024 * 1024];
+    float luma = 1.0f;
+    uint32 palette[256];
     uint32 tile0[64];
     uint8 colorWindow[240 * 256];
     float lines[240 * 24];
+    uint64 hash = 0;
   } gpuMode7;
   auto prepareGpuMode7() -> void;
 };

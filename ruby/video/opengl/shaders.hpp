@@ -100,6 +100,7 @@ static string OpenGLMode7FragmentShader = R"(
   uniform sampler2D mode7Window;
   uniform int ss;
   uniform float lineOrigin;
+  uniform float mode7Luma;
   uniform vec4 sourceSize;
   uniform vec4 targetSize;
 
@@ -188,14 +189,11 @@ static string OpenGLMode7FragmentShader = R"(
     vec2 gx = duvdx;
     vec2 gy = duvdy;
     float t = max(length(gx), length(gy));
-    // Near field: at least ~1 texel of bilinear so we never snap to nearest
-    // (that snap was the F-Zero sharpness ring). Horizon keeps the real footprint.
+    // lod 0: cheap bilinear for supersample taps. Horizon uses the real footprint.
     if(t < 0.9) {
-      float s = 0.9 / max(t, 1.0e-6);
-      gx *= s;
-      gy *= s;
+      return textureLod(mode7Map, uv / 1024.0, 0.0);
     }
-    return textureGrad(mode7Map, uv / 1024.0, gx / 1024.0, gy / 1024.0);
+    return textureGrad(mode7Map, uv / 1024.0, gx * 1.15 / 1024.0, gy * 1.15 / 1024.0);
   }
 
   vec2 wrapDiff(vec2 d) {
@@ -212,6 +210,7 @@ static string OpenGLMode7FragmentShader = R"(
     int y1 = min(y + 1, 239);
     float fy = clamp(snes.y - float(y), 0.0, 1.0);
     vec3 rgb = mix(applyMath(texel.rgb, y, wx), applyMath(texel.rgb, y1, wx), fy);
+    rgb *= mode7Luma;
     return vec4(rgb, 1.0);
   }
 
@@ -258,12 +257,11 @@ static string OpenGLMode7FragmentShader = R"(
     if(wFilt < 1.0) {
       vec4 sharp = vec4(0.0);
       int n = ss < 1 ? 1 : ss;
+      if(n > 16) n = 16;
       vec2 tap = duvdx / float(n);
       vec2 tapy = duvdy / float(n);
-      for(int j = 0; j < 16; j++) {
-        if(j >= n) break;
-        for(int i = 0; i < 16; i++) {
-          if(i >= n) break;
+      for(int j = 0; j < n; j++) {
+        for(int i = 0; i < n; i++) {
           vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
           sharp += sampleM7(snes + o * pixel, tap, tapy);
         }
@@ -274,5 +272,47 @@ static string OpenGLMode7FragmentShader = R"(
     vec4 dest = vec4(spr.rgb, 1.0);
     dest = mix(dest, acc, acc.a);
     fragColor = dest;
+  }
+)";
+
+// Expand Mode 7 VRAM (128×128 words: R=tilemap, G=character) + 256-colour
+// palette into the 1024² colour atlas. Runs on the GPU; the CPU must not
+// walk a million pixels when a sprite tile changes.
+static string OpenGLMode7MapVertexShader = R"(
+  #version 150
+
+  out vec2 uv;
+
+  void main() {
+    float x = (gl_VertexID == 1 || gl_VertexID == 3) ? 1.0 : 0.0;
+    float y = (gl_VertexID == 2 || gl_VertexID == 3) ? 1.0 : 0.0;
+    gl_Position = vec4(x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0);
+    uv = vec2(x, y);
+  }
+)";
+
+static string OpenGLMode7MapFragmentShader = R"(
+  #version 150
+
+  uniform sampler2D mode7Vram;
+  uniform sampler2D mode7Palette;
+
+  in vec2 uv;
+  out vec4 fragColor;
+
+  vec2 fetchWord(int word) {
+    return texelFetch(mode7Vram, ivec2(word & 127, word >> 7), 0).rg;
+  }
+
+  void main() {
+    int px = int(gl_FragCoord.x);
+    int py = int(gl_FragCoord.y);
+    int tile = int(fetchWord((py >> 3) * 128 + (px >> 3)).r * 255.0 + 0.5);
+    int pal = int(fetchWord((tile << 6) + ((py & 7) << 3) + (px & 7)).g * 255.0 + 0.5);
+    if(pal == 0) {
+      fragColor = vec4(0.0);
+      return;
+    }
+    fragColor = texelFetch(mode7Palette, ivec2(pal, 0), 0);
   }
 )";
