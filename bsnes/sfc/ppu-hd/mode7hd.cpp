@@ -82,9 +82,11 @@ auto PPU::Line::cacheMode7HD() -> void {
 
 auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
   const bool extbg = source == Source::BG2;
-  const uint outScale = ppu.hdScale();
+  // GPU composites at the window. Keep a 1× CPU Mode 7 so a missed GPU
+  // sample (empty atlas, OOB) still shows the track in the framebuffer.
+  const uint outScale = (ppu.gpuSupersample() && !extbg) ? 1 : ppu.hdScale();
   uint sampScale = ppu.hdSupersample();
-  if(sampScale < 2 || extbg) sampScale = 1;
+  if(sampScale < 2 || extbg || ppu.gpuSupersample()) sampScale = 1;
   if(sampScale > 16) sampScale = 16;
   const uint scale = outScale * sampScale;
 
@@ -156,7 +158,7 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
     p[13] = (float)((voffset - vcenter) % 1024);
     uint repeat = (uint)io.mode7.repeat & 3;
     p[14] = (io.mode7.hflip ? 1.0f : 0.0f) + 2.0f * (float)repeat;
-    p[15] = (io.mode7.vflip ? 1.0f : 0.0f) + 2.0f;
+    p[15] = HDMode7::packLineValid(io.mode7.vflip);
     uint32 fc = decode(io.col.fixedColor);
     uint32 bc = decode(cgram[0]);
     p[16] = HDMode7::mathFlags(io.col.enable[Source::BG1], io.col.mathMode, io.col.halve, io.col.blendMode);
@@ -171,9 +173,6 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
     for(uint x : range(256)) {
       win[x] = HDMode7::colorWindowBits(mathWin[x], aboveWin[x], self.aboveEnable && !windowAbove[x]);
     }
-    // GPU replaces BG1. Sampling Mode 7 at hdScale on the CPU is discarded
-    // (and was still paid at 2× SS). EXTBG BG2 keeps the CPU sampler.
-    return;
   }
 
   int pixelYp = INT_MIN;

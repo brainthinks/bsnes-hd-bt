@@ -226,13 +226,16 @@ auto PPU::refresh() -> void {
 }
 
 auto PPU::prepareGpuMode7() -> void {
-  gpuMode7.luma = (float)io.displayBrightness / 15.0f;
-  uint64 hash = HDMode7::mapContentHash(
-    hdTrueColor(), io.col.directColor, vram
-  );
-  if(hash == gpuMode7.hash) return;
-  gpuMode7.hash = hash;
-
+  // vblank INIDISP is often 0 / force-blank. Use a Mode 7 scanline's
+  // cached brightness so the shader does not multiply the track by 0.
+  uint bright = 0;
+  for(uint y : range(240)) {
+    if(!HDMode7::lineIsValid(gpuMode7.lines[y * HDMode7::lineFloats + HDMode7::lineValidIndex])) continue;
+    uint b = lines[y].io.displayBrightness;
+    if(b > bright) bright = b;
+  }
+  if(!bright) bright = io.displayBrightness;
+  gpuMode7.luma = (float)bright / 15.0f;
   auto table = lightTable[15];
   if(!table) table = lightTable[io.displayBrightness];
   for(uint n : range(256)) {
@@ -260,6 +263,11 @@ auto PPU::prepareGpuMode7() -> void {
       gpuMode7.tile0[py * 8 + px] = gpuMode7.palette[palette];
     }
   }
+  uint64 hash = HDMode7::mapContentHash(
+    hdTrueColor(), io.col.directColor, vram
+  );
+  if(hash == gpuMode7.hash) return;
+  gpuMode7.hash = hash;
 }
 
 auto PPU::load() -> bool {

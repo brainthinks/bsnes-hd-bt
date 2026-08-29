@@ -114,21 +114,44 @@ auto OpenGL::setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint16_t*
 #define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
 #endif
 
+auto OpenGL::uploadMode7VramPalette() -> void {
+  if(!mode7Vram || !mode7Palette) return;
+  uint8_t rgba[128 * 128 * 4];
+  for(uint n = 0; n < 16384; n++) {
+    uint16_t w = mode7Vram[n];
+    rgba[n * 4 + 0] = (uint8_t)(w & 255);
+    rgba[n * 4 + 1] = (uint8_t)(w >> 8);
+    rgba[n * 4 + 2] = 0;
+    rgba[n * 4 + 3] = 255;
+  }
+  if(!mode7VramTex) {
+    glGenTextures(1, &mode7VramTex);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, mode7VramTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 128, 128, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  } else {
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, mode7VramTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 128, 128, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+  }
+  if(!mode7PaletteTex) {
+    glGenTextures(1, &mode7PaletteTex);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, mode7PaletteTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Palette);
+    glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  } else {
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, mode7PaletteTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Palette);
+  }
+}
+
 auto OpenGL::rebuildMode7Map() -> void {
   if(!mode7MapProgram || !mode7Vram || !mode7Palette) return;
 
-  if(!mode7VramTex) glGenTextures(1, &mode7VramTex);
-  if(!mode7PaletteTex) glGenTextures(1, &mode7PaletteTex);
-
-  glActiveTexture(GL_TEXTURE5);
-  glBindTexture(GL_TEXTURE_2D, mode7VramTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, 128, 128, 0, GL_RG, GL_UNSIGNED_BYTE, mode7Vram);
-  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
-
-  glActiveTexture(GL_TEXTURE6);
-  glBindTexture(GL_TEXTURE_2D, mode7PaletteTex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, mode7Palette);
-  glrParameters(GL_NEAREST, GL_CLAMP_TO_EDGE);
+  uploadMode7VramPalette();
 
   if(!mode7MapTex) {
     glGenTextures(1, &mode7MapTex);
@@ -174,10 +197,32 @@ auto OpenGL::rebuildMode7Map() -> void {
 }
 
 auto OpenGL::outputMode7() -> bool {
-  if(!mode7Gpu || !mode7Program || !mode7MapProgram || !mode7Vram || !mode7Palette || !mode7Lines) return false;
+  auto gpuLog = [](const char* msg) {
+    if(!getenv("BSNES_DUMP_GPU")) return;
+    static FILE* fp = nullptr;
+    if(!fp) fp = fopen("/tmp/bsnes-hd-gpu.log", "w");
+    if(!fp) return;
+    fputs(msg, fp);
+    fputc('\n', fp);
+    fflush(fp);
+    fputs(msg, stderr);
+    fputc('\n', stderr);
+  };
+  if(!mode7Gpu || !mode7Program || !mode7Vram || !mode7Palette || !mode7Lines) {
+    static bool once = false;
+    if(!once) {
+      once = true;
+      char buf[256];
+      snprintf(buf, sizeof buf, "[bsnes-hd] GPU Mode 7 skipped gpu=%d prog=%u vram=%p pal=%p lines=%p",
+        (int)mode7Gpu, (unsigned)mode7Program, (const void*)mode7Vram, (const void*)mode7Palette, (const void*)mode7Lines);
+      gpuLog(buf);
+    }
+    return false;
+  }
 
-  if(!mode7MapReady) rebuildMode7Map();
-  if(!mode7MapTex) return false;
+  uploadMode7VramPalette();
+  if(!mode7VramTex || !mode7PaletteTex) return false;
+  if(mode7MapProgram && !mode7MapReady) rebuildMode7Map();
   mode7MapReady = true;
 
   if(!mode7LineTex) {
@@ -196,18 +241,23 @@ auto OpenGL::outputMode7() -> bool {
   }
 
   glActiveTexture(GL_TEXTURE1);
-  glBindTexture(GL_TEXTURE_2D, mode7MapTex);
+  glBindTexture(GL_TEXTURE_2D, mode7MapTex ? mode7MapTex : mode7VramTex);
 
   glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, mode7LineTex);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, mode7Lines);
 
   glActiveTexture(GL_TEXTURE3);
-  glBindTexture(GL_TEXTURE_2D, mode7Tile0Tex);
+  glBindTexture(GL_TEXTURE_2D, mode7Tile0Tex ? mode7Tile0Tex : mode7PaletteTex);
 
   glActiveTexture(GL_TEXTURE4);
   glBindTexture(GL_TEXTURE_2D, mode7WindowTex);
   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 240, GL_RED, GL_UNSIGNED_BYTE, mode7Window);
+
+  glActiveTexture(GL_TEXTURE5);
+  glBindTexture(GL_TEXTURE_2D, mode7VramTex);
+  glActiveTexture(GL_TEXTURE6);
+  glBindTexture(GL_TEXTURE_2D, mode7PaletteTex);
 
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture);
@@ -222,9 +272,51 @@ auto OpenGL::outputMode7() -> bool {
   glrUniform1i("mode7Lines", 2);
   glrUniform1i("mode7Tile0", 3);
   glrUniform1i("mode7Window", 4);
+  glrUniform1i("mode7Vram", 5);
+  glrUniform1i("mode7Palette", 6);
+  GLint locSs = glGetUniformLocation(mode7Program, "ss");
   glrUniform1i("ss", (GLint)mode7Ss);
   glrUniform1f("lineOrigin", mode7LineOrigin);
   glrUniform1f("mode7Luma", mode7Luma);
+  {
+    static bool once = false;
+    if(!once) {
+      once = true;
+      uint32_t pix = buffer && width > 80 && height > 80 ? buffer[(height / 2) * width + (width / 2)] : 0;
+      uint32_t pal1 = mode7Palette ? mode7Palette[1] : 0;
+      uint valid = 0;
+      int y0 = -1, y1 = -1;
+      if(mode7Lines) {
+        for(uint y = 0; y < 240; y++) {
+          if(mode7Lines[y * 24 + 15] < 1.5f) continue;
+          if(y0 < 0) y0 = (int)y;
+          y1 = (int)y;
+          valid++;
+        }
+      }
+      char buf[512];
+      snprintf(buf, sizeof buf,
+        "[bsnes-hd] GPU Mode 7 ss=%u loc(ss)=%d luma=%.3f origin=%.1f pal1=0x%08x validLines=%u y=%d..%d vramTex=%u palTex=%u midPixel=0x%08x %ux%u",
+        (unsigned)mode7Ss, (int)locSs, mode7Luma, mode7LineOrigin, (unsigned)pal1,
+        valid, y0, y1, (unsigned)mode7VramTex, (unsigned)mode7PaletteTex,
+        (unsigned)pix, (unsigned)width, (unsigned)height);
+      gpuLog(buf);
+      if(mode7Lines && y0 >= 0) {
+        const float* p = mode7Lines + y0 * 24;
+        snprintf(buf, sizeof buf,
+          "[bsnes-hd] line %d A=%.1f B=%.1f C=%.1f D=%.1f math=%.1f fx=%.3f,%.3f,%.3f pack=%.0f valid=%.0f",
+          y0, p[0], p[1], p[2], p[3], p[16], p[17], p[18], p[19], p[14], p[15]);
+        gpuLog(buf);
+        int yMid = (y0 + y1) / 2;
+        while(yMid > y0 && mode7Lines[yMid * 24 + 15] < 1.5f) yMid--;
+        p = mode7Lines + yMid * 24;
+        snprintf(buf, sizeof buf,
+          "[bsnes-hd] line %d A=%.1f B=%.1f C=%.1f D=%.1f math=%.1f fx=%.3f,%.3f,%.3f pack=%.0f valid=%.0f",
+          yMid, p[0], p[1], p[2], p[3], p[16], p[17], p[18], p[19], p[14], p[15]);
+        gpuLog(buf);
+      }
+    }
+  }
   float sw = width ? width : 1, sh = height ? height : 1;
   uint targetWidth = absoluteWidth ? absoluteWidth : (outputWidth ? outputWidth : 1);
   uint targetHeight = absoluteHeight ? absoluteHeight : (outputHeight ? outputHeight : 1);
@@ -234,6 +326,63 @@ auto OpenGL::outputMode7() -> bool {
   glrUniform4f("targetSize", tw, th, 1.0 / tw, 1.0 / th);
   glrUniform4f("outputSize", ow, oh, 1.0 / ow, 1.0 / oh);
   render(width, height, outputX, outputY, outputWidth, outputHeight);
+  if(auto dump = getenv("BSNES_DUMP_GPU")) {
+    static bool mathOnce = false;
+    if(!mathOnce && mode7Lines) {
+      mathOnce = true;
+      if(auto fp = fopen("/tmp/bsnes-math.txt", "w")) {
+        fprintf(fp, "ss=%u luma=%.4f origin=%.2f %ux%u\n",
+          (unsigned)mode7Ss, mode7Luma, mode7LineOrigin, (unsigned)width, (unsigned)height);
+        if(buffer && width && height) {
+          uint xs[4] = {width / 2, width / 2, width / 2, width / 2};
+          uint ys[4] = {height / 5, height / 3, height / 2, (height * 2) / 3};
+          for(uint i = 0; i < 4; i++) {
+            uint x = xs[i], y = ys[i];
+            if(x >= width || y >= height) continue;
+            fprintf(fp, "cpu %u,%u = 0x%08x\n", x, y, (unsigned)buffer[y * width + x]);
+          }
+        }
+        for(uint y = 0; y < 240; y++) {
+          const float* p = mode7Lines + y * 24;
+          if(p[15] < 1.5f) continue;
+          uint mathN = 0, aboveN = 0, visN = 0;
+          if(mode7Window) {
+            const uint8_t* w = mode7Window + y * 256;
+            for(uint x = 0; x < 256; x++) {
+              if(w[x] & 1) mathN++;
+              if(w[x] & 2) aboveN++;
+              if(w[x] & 4) visN++;
+            }
+          }
+          fprintf(fp, "y=%u A=%.1f B=%.1f C=%.1f D=%.1f pack=%.0f valid=%.0f math=%.0f fx=%.3f,%.3f,%.3f winMath=%u winAbove=%u bg1vis=%u\n",
+            y, p[0], p[1], p[2], p[3], p[14], p[15], p[16], p[17], p[18], p[19], mathN, aboveN, visN);
+        }
+        fclose(fp);
+      }
+    }
+    static uint dumped = 0;
+    if(++dumped >= 8) {
+      GLint vp[4] = {};
+      glGetIntegerv(GL_VIEWPORT, vp);
+      int w = vp[2], h = vp[3];
+      if(w > 0 && h > 0) {
+        auto* px = new uint8_t[(size_t)w * (size_t)h * 4];
+        glReadPixels(vp[0], vp[1], w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        if(auto fp = fopen(dump, "wb")) {
+          fprintf(fp, "P6\n%d %d\n255\n", w, h);
+          for(int y = h - 1; y >= 0; y--) {
+            for(int x = 0; x < w; x++) {
+              auto* p = px + ((size_t)y * (size_t)w + (size_t)x) * 4;
+              fputc(p[0], fp); fputc(p[1], fp); fputc(p[2], fp);
+            }
+          }
+          fclose(fp);
+        }
+        delete[] px;
+      }
+      _exit(0);
+    }
+  }
   program = saved;
   return true;
 }
@@ -356,8 +505,10 @@ auto OpenGL::initialize(const string& shader) -> bool {
   mode7Program = glCreateProgram();
   mode7Vertex = glrCreateShader(mode7Program, GL_VERTEX_SHADER, OpenGLOutputVertexShader);
   mode7Fragment = glrCreateShader(mode7Program, GL_FRAGMENT_SHADER, OpenGLMode7FragmentShader);
-  if(mode7Vertex && mode7Fragment) glrLinkProgram(mode7Program);
-  else { mode7Program = 0; }
+  if(mode7Vertex && mode7Fragment) {
+    glBindFragDataLocation(mode7Program, 0, "fragColor");
+    glrLinkProgram(mode7Program);
+  } else { mode7Program = 0; }
 
   mode7MapProgram = glCreateProgram();
   mode7MapVertex = glrCreateShader(mode7MapProgram, GL_VERTEX_SHADER, OpenGLMode7MapVertexShader);

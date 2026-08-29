@@ -67,9 +67,22 @@ auto PPU::Line::flush() -> void {
   }
 
   if(Line::count) {
-    ppu.gpuMode7.active = false;
-    memory::fill<float>(ppu.gpuMode7.lines, 240 * 24);
-    memory::fill<uint8>(ppu.gpuMode7.colorWindow, 240 * 256);
+    const bool gpu = ppu.gpuSupersample();
+    // writeVRAM/writeOAM also flush. Wiping all 240 GPU lines there dropped
+    // Mode 7 matrices before videoFrame, so SS never ran (CPU 1× only).
+    if(gpu && HDMode7::gpuFlushClearsAll(Line::start)) {
+      ppu.gpuMode7.active = false;
+      memory::fill<float>(ppu.gpuMode7.lines, 240 * 24);
+      memory::fill<uint8>(ppu.gpuMode7.colorWindow, 240 * 256);
+    } else if(gpu) {
+      for(uint i = 0; i < Line::count; i++) {
+        uint y = ppu.lines[Line::start + i].y;
+        if(y < 240) {
+          memory::fill<float>(ppu.gpuMode7.lines + y * 24, 24);
+          memory::fill<uint8>(ppu.gpuMode7.colorWindow + y * 256, 256);
+        }
+      }
+    }
     if(ppu.hdScale() > 1) cacheMode7HD();
     #pragma omp parallel for if(Line::count >= 8)
     for(uint y = 0; y < Line::count; y++) {
@@ -85,6 +98,15 @@ auto PPU::Line::flush() -> void {
       } else {
         //standard 240p (progressive) and 480i (interlaced) rendering
         ppu.lines[Line::start + y].render(ppu.field());
+      }
+    }
+    if(gpu) {
+      ppu.gpuMode7.active = false;
+      for(uint y = 0; y < 240; y++) {
+        if(HDMode7::lineIsValid(ppu.gpuMode7.lines[y * HDMode7::lineFloats + HDMode7::lineValidIndex])) {
+          ppu.gpuMode7.active = true;
+          break;
+        }
       }
     }
     Line::start = 0;

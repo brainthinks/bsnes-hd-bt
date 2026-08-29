@@ -1,5 +1,7 @@
 # HD PPU: remaining work vs follow-ups
 
+Agent requirements for HD PPU work live in `.grok/skills/hd-ppu/SKILL.md`.
+
 This feature is **HD PPU** on the desktop app: a third renderer (Accurate /
 Fast / HD) with 24-bit color and HD Mode 7. Supersampling on HD is the GPU
 path (no checkbox). Fast and Accurate do not change. The CPU Mode 7 sampler

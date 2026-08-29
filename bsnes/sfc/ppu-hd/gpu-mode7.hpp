@@ -21,10 +21,10 @@ inline auto colorWindowBits(bool mathWin, bool aboveWin, bool bg1Visible = false
   return std::uint8_t((mathWin ? 1 : 0) | (aboveWin ? 2 : 0) | (bg1Visible ? bg1VisibleBit : 0));
 }
 
-// Atlas rebuild is keyed only on the Mode 7 tilemap (low bytes of vram
-// words 0..16383). Character bytes, OBJ CHR, and CGRAM all change during
-// explosions; hashing any of them called glGenerateMipmap every debris
-// frame and stalled a 60 FPS present. Brightness is a shader uniform.
+// Atlas rebuild keys on Mode 7 vram words 0..16383 (tilemap low + CHR high).
+// Upper vram (16384..32767) is OBJ; hashing it rebuilt mips on explosions.
+// Super Mario Kart writes CHR after the tilemap; ignoring high bytes left
+// the atlas empty (backdrop showing through as a flat track).
 constexpr std::uint32_t mode7VramWords = 16384;
 
 inline auto mapContentHash(
@@ -33,7 +33,7 @@ inline auto mapContentHash(
   const std::uint16_t* vram
 ) -> std::uint64_t {
   std::uint64_t hash = (trueColor ? 1u : 0u) | (directColor ? 2u : 0u);
-  for(std::uint32_t n = 0; n < mode7VramWords; n++) hash = hash * 0x100000001b3ull ^ (vram[n] & 0xff);
+  for(std::uint32_t n = 0; n < mode7VramWords; n++) hash = hash * 0x100000001b3ull ^ vram[n];
   return hash;
 }
 
@@ -60,6 +60,25 @@ inline auto gpuSampleScale(std::uint32_t ssFactor, bool legacySupersample) -> st
 inline auto cpuSampleScale(bool gpuSupersample, std::uint32_t ssFactor, bool legacySupersample) -> std::uint32_t {
   if(gpuSupersample) return 1;
   return gpuSampleScale(ssFactor, legacySupersample);
+}
+
+// 6 RGBA32F texels per scanline. of.w (index 15) marks a Mode 7 line.
+constexpr int lineFloats = 24;
+constexpr int lineValidIndex = 15;
+constexpr float lineValidMin = 1.5f;
+
+inline auto packLineValid(bool vflip) -> float {
+  return (vflip ? 1.0f : 0.0f) + 2.0f;
+}
+
+inline auto lineIsValid(float ofw) -> bool {
+  return ofw >= lineValidMin;
+}
+
+// writeVRAM/writeOAM flush with start > 1. Clearing all 240 lines there
+// dropped Mode 7 matrices before present (SMK looked like Fast nearest).
+inline auto gpuFlushClearsAll(std::uint32_t start) -> bool {
+  return start <= 1;
 }
 
 }

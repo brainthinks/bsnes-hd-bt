@@ -95,6 +95,7 @@ struct OpenGL : OpenGLProgram {
 
   auto setMode7Gpu(bool enable, uint ss, float lineOrigin, const uint16_t* vram, const uint32_t* palette, const uint32_t* tile0, const float* lines, const uint8_t* colorWindow, uint64_t mapHash = 0, float luma = 1.0f) -> void;
   auto outputMode7() -> bool;
+  auto uploadMode7VramPalette() -> void;
   auto rebuildMode7Map() -> void;
   GLuint mode7Program = 0;
   GLuint mode7Vertex = 0;

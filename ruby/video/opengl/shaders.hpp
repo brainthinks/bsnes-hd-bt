@@ -98,6 +98,8 @@ static string OpenGLMode7FragmentShader = R"(
   uniform sampler2D mode7Lines;
   uniform sampler2D mode7Tile0;
   uniform sampler2D mode7Window;
+  uniform sampler2D mode7Vram;
+  uniform sampler2D mode7Palette;
   uniform int ss;
   uniform float lineOrigin;
   uniform float mode7Luma;
@@ -129,7 +131,10 @@ static string OpenGLMode7FragmentShader = R"(
     int wbits = int(texelFetch(mode7Window, ivec2(wx, yLine), 0).r * 255.0 + 0.5);
     bool mathWin = (wbits & 1) != 0;
     bool aboveWin = (wbits & 2) != 0;
-    if(!aboveWin) rgb = vec3(0.0);
+    // Never replace the texel with black because a window bit is off.
+    // SMK's floor is Mode 7 with color-window bits that are not "clip the
+    // main screen"; zeroing here painted an otherwise valid track black
+    // while the CPU 1x fallback was also empty (GPU-on, no HD buffer).
     if((flags & 1) != 0 && mathWin) {
       vec3 fx = math.yzw;
       bool halve = (flags & 4) != 0 && aboveWin && (flags & 8) == 0;
@@ -177,6 +182,19 @@ static string OpenGLMode7FragmentShader = R"(
     return true;
   }
 
+  vec4 decodeVram(int px, int py) {
+    int tileWord = (py >> 3 & 127) * 128 + (px >> 3 & 127);
+    int tile = int(texelFetch(mode7Vram, ivec2(tileWord & 127, tileWord >> 7), 0).r * 255.0 + 0.5);
+    int pixWord = (tile << 6) + ((py & 7) << 3) + (px & 7);
+    int pal = int(texelFetch(mode7Vram, ivec2(pixWord & 127, pixWord >> 7), 0).g * 255.0 + 0.5);
+    if(pal == 0) return vec4(0.0);
+    // Palette upload is BGRA; some drivers present A=0 even when the CPU
+    // packed 0xff. RGB is the Mode 7 colour — force opaque so shadeM7
+    // cannot discard a valid texel (SMK floor went black that way).
+    vec4 c = texelFetch(mode7Palette, ivec2(pal, 0), 0);
+    return vec4(c.rgb, 1.0);
+  }
+
   vec4 sampleMap(vec2 uv, int repeatMode, vec2 duvdx, vec2 duvdy) {
     bool oob = uv.x < 0.0 || uv.x >= 1024.0 || uv.y < 0.0 || uv.y >= 1024.0;
     if(oob) {
@@ -186,14 +204,13 @@ static string OpenGLMode7FragmentShader = R"(
         return texelFetch(mode7Tile0, t, 0);
       }
     }
-    vec2 gx = duvdx;
-    vec2 gy = duvdy;
-    float t = max(length(gx), length(gy));
-    // lod 0: cheap bilinear for supersample taps. Horizon uses the real footprint.
-    if(t < 0.9) {
-      return textureLod(mode7Map, uv / 1024.0, 0.0);
-    }
-    return textureGrad(mode7Map, uv / 1024.0, gx * 1.15 / 1024.0, gy * 1.15 / 1024.0);
+    int px = int(floor(uv.x));
+    int py = int(floor(uv.y));
+    if(repeatMode < 2) { px &= 1023; py &= 1023; }
+    // Always decode live VRAM. The mip atlas is allowed to be stale or
+    // empty (SMK loads CHR after the tilemap); using it as an opaque
+    // yellow floor hid the track.
+    return decodeVram(px, py);
   }
 
   vec2 wrapDiff(vec2 d) {
@@ -203,14 +220,14 @@ static string OpenGLMode7FragmentShader = R"(
   }
 
   vec4 shadeM7(vec4 texel, vec2 snes, int y) {
-    // Mipmaps average palette-0 holes; don't punch through to the CPU
-    // nearest floor (scanline bands + sparkle).
-    if(texel.a < 0.02) return vec4(0.0);
+    if(texel.a < 0.02 && texel.r + texel.g + texel.b < 0.01) return vec4(0.0);
     int wx = int(clamp(snes.x, 0.0, 255.0));
-    int y1 = min(y + 1, 239);
-    float fy = clamp(snes.y - float(y), 0.0, 1.0);
-    vec3 rgb = mix(applyMath(texel.rgb, y, wx), applyMath(texel.rgb, y1, wx), fy);
-    rgb *= mode7Luma;
+    vec3 rgb = applyMath(texel.rgb, y, wx);
+    // Palette is already lightTable[15]. Per-line brightness is a dimming
+    // factor. vblank INIDISP is often 0; never let that zero the track.
+    float luma = mode7Luma;
+    if(luma < 1.0 / 15.0) luma = 1.0;
+    rgb *= luma;
     return vec4(rgb, 1.0);
   }
 
@@ -236,42 +253,30 @@ static string OpenGLMode7FragmentShader = R"(
     float snesH = sourceSize.y / scale;
     vec2 snes = vec2(texCoord.x * 256.0, lineOrigin + texCoord.y * snesH);
     vec2 pixel = vec2(256.0, snesH) / max(targetSize.xy, vec2(1.0));
-
-    vec2 uv, uvx, uvLine;
-    int repeatMode, y, rIgn, yIgn;
-    bool valid = projectM7(snes, uv, repeatMode, y);
-    projectM7(snes + vec2(pixel.x, 0.0), uvx, rIgn, yIgn);
-    // Y footprint must cross a SNES scanline so HDMA perspective is included.
-    // pixel.y is often < 1, so snes+pixel.y stays on the same line and LOD
-    // jumps once per scanline (horizontal banding).
-    projectM7(snes + vec2(0.0, 1.0), uvLine, rIgn, yIgn);
-    vec2 duvdx = wrapDiff(uvx - uv);
-    vec2 duvdy = wrapDiff(uvLine - uv) * pixel.y;
-    float texels = max(length(duvdx), length(duvdy));
-
+    int n = ss < 1 ? 1 : ss;
+    if(n > 16) n = 16;
     vec4 acc = vec4(0.0);
-    float wFilt = valid ? smoothstep(0.45, 1.15, texels) : 0.0;
-    if(wFilt > 0.0) {
-      acc = shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy), snes, y);
-    }
-    if(wFilt < 1.0) {
-      vec4 sharp = vec4(0.0);
-      int n = ss < 1 ? 1 : ss;
-      if(n > 16) n = 16;
-      vec2 tap = duvdx / float(n);
-      vec2 tapy = duvdy / float(n);
-      for(int j = 0; j < n; j++) {
-        for(int i = 0; i < n; i++) {
-          vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
-          sharp += sampleM7(snes + o * pixel, tap, tapy);
+    float hits = 0.0;
+    for(int j = 0; j < n; j++) {
+      for(int i = 0; i < n; i++) {
+        vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
+        vec2 s = snes + o * pixel;
+        vec2 uv;
+        int repeatMode;
+        int y;
+        if(!projectM7(s, uv, repeatMode, y)) continue;
+        vec4 c = shadeM7(sampleMap(uv, repeatMode, vec2(0.0), vec2(0.0)), s, y);
+        if(c.a > 0.01) {
+          acc += c;
+          hits += 1.0;
         }
       }
-      sharp /= float(n * n);
-      acc = mix(sharp, acc, wFilt);
     }
-    vec4 dest = vec4(spr.rgb, 1.0);
-    dest = mix(dest, acc, acc.a);
-    fragColor = dest;
+    if(hits > 0.0) {
+      fragColor = vec4(acc.rgb / hits, 1.0);
+      return;
+    }
+    fragColor = vec4(spr.rgb, 1.0);
   }
 )";
 
