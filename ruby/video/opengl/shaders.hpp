@@ -253,6 +253,10 @@ static string OpenGLMode7FragmentShader = R"(
     float snesH = sourceSize.y / scale;
     vec2 snes = vec2(texCoord.x * 256.0, lineOrigin + texCoord.y * snesH);
     vec2 pixel = vec2(256.0, snesH) / max(targetSize.xy, vec2(1.0));
+    // Maximize shrinks a window pixel in SNES space, so far SMK grass turns
+    // into a checker. Keep at least the ~4.5× windowed footprint. This is
+    // not a 1-SNES-pixel blur (that smeared F-Zero).
+    vec2 kernel = max(pixel, vec2(256.0 / 1280.0, snesH / 960.0));
     int n = ss < 1 ? 1 : ss;
     if(n > 16) n = 16;
     vec4 acc = vec4(0.0);
@@ -260,7 +264,7 @@ static string OpenGLMode7FragmentShader = R"(
     for(int j = 0; j < n; j++) {
       for(int i = 0; i < n; i++) {
         vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
-        vec2 s = snes + o * pixel;
+        vec2 s = snes + o * kernel;
         vec2 uv;
         int repeatMode;
         int y;

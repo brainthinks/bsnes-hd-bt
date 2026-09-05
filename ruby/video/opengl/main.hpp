@@ -362,12 +362,43 @@ auto OpenGL::outputMode7() -> bool {
     }
     static uint dumped = 0;
     if(++dumped >= 8) {
-      GLint vp[4] = {};
-      glGetIntegerv(GL_VIEWPORT, vp);
-      int w = vp[2], h = vp[3];
-      if(w > 0 && h > 0) {
-        auto* px = new uint8_t[(size_t)w * (size_t)h * 4];
-        glReadPixels(vp[0], vp[1], w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+      int w = 0, h = 0;
+      uint8_t* px = nullptr;
+      int dw = getenv("BSNES_DUMP_W") ? atoi(getenv("BSNES_DUMP_W")) : 0;
+      int dh = getenv("BSNES_DUMP_H") ? atoi(getenv("BSNES_DUMP_H")) : 0;
+      if(dw >= 256 && dh >= 224) {
+        GLint prevTex = 0;
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+        GLuint fbo = 0, tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dw, dh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, prevTex);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        glrUniform4f("targetSize", (float)dw, (float)dh, 1.0f / dw, 1.0f / dh);
+        glrUniform4f("outputSize", (float)dw, (float)dh, 1.0f / dw, 1.0f / dh);
+        render(width, height, 0, 0, dw, dh);
+        w = dw; h = dh;
+        px = new uint8_t[(size_t)w * (size_t)h * 4];
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &tex);
+      } else {
+        GLint vp[4] = {};
+        glGetIntegerv(GL_VIEWPORT, vp);
+        w = vp[2]; h = vp[3];
+        if(w > 0 && h > 0) {
+          px = new uint8_t[(size_t)w * (size_t)h * 4];
+          glReadPixels(vp[0], vp[1], w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        }
+      }
+      if(px && w > 0 && h > 0) {
         if(auto fp = fopen(dump, "wb")) {
           fprintf(fp, "P6\n%d %d\n255\n", w, h);
           for(int y = h - 1; y >= 0; y--) {
