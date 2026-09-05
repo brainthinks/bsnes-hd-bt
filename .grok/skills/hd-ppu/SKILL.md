@@ -25,9 +25,15 @@ Accurate and Fast stay hardware-accurate and must not change. HD is opt-in.
    compile, empty atlas). The user must still *see the enhancement* when GPU
    is selected and working — a CPU 1× fallback that looks like Fast is not
    “HD working.”
-3. **No Mode 7 noise or banding** — minification must be a stable average, not
-   sparkle or scanline bands. SS and/or mips are the tools; dropping SS on
-   far floors to “save” an atlas is a regression.
+3. **No blur, banding, or noise** — all three are regressions. Minification
+   must be a stable average of **raw texels**, not sparkle, scanline bands,
+   or rainbow moiré, and not a softened mush. A 1-SNES-pixel kernel, atlas
+   mips, or a 2×2 VRAM box across the floor removes bands by blurring; that
+   is wrong. If a filter makes F-Zero grass look out of focus, revert it.
+   Iterate on **bsnes fullscreen** captures (`--fullscreen`, real viewport)
+   using `.grok/skills/hd-ppu-visual/SKILL.md` — do not ask the user to
+   eyeball every attempt, and do not treat maximize or a fake `DUMP_W/H`
+   FBO as fullscreen.
 4. **All games** — F-Zero is not enough. Super Mario Kart, Castlevania IV,
    Contra III (EXTBG), Pilotwings, and the rest of the game table in
    `docs/hd-ppu-next.md` must keep their Mode 7 (and non-Mode-7 HD) features.
@@ -48,8 +54,9 @@ Accurate and Fast stay hardware-accurate and must not change. HD is opt-in.
 
 ## Verify
 
-- F-Zero race: SS floor, fog, no red-tint, no banding.
-- Super Mario Kart: track texture present **and** supersampled, including
-  2-player.
+- F-Zero race **in bsnes fullscreen**: SS floor, fog, no red-tint, no
+  banding, no blur.
+- Super Mario Kart **in bsnes fullscreen**: track texture present **and**
+  supersampled, including 2-player; no rainbow far grass, no smeared dirt.
 - CV4 4-2 rotation and 4-3 cylinder vs official Fast.
 - Fast/Accurate unchanged; HD+CPU still runs without OpenGL 3.2.
