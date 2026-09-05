@@ -70,6 +70,7 @@ auto Program::viewportRefresh() -> void {
         memory::copy<uint32>(output + y * dstPitch, data32 + y * srcPitch, width);
       }
       video.release();
+      bindGpuMode7();
       video.output(outputWidth, outputHeight);
     }
     return;

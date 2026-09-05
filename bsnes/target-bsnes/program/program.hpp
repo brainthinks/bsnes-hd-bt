@@ -105,6 +105,7 @@ struct Program : Lock, Emulator::Platform {
   auto updateVideoEffects() -> void;
   auto toggleVideoFullScreen() -> void;
   auto toggleVideoPseudoFullScreen() -> void;
+  auto bindGpuMode7() -> void;
 
   //audio.cpp
   auto updateAudioDriver(Window parent) -> void;

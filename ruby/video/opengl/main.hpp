@@ -596,6 +596,8 @@ auto OpenGL::terminate() -> void {
   if(mode7LineTex) { glDeleteTextures(1, &mode7LineTex); mode7LineTex = 0; }
   if(mode7Tile0Tex) { glDeleteTextures(1, &mode7Tile0Tex); mode7Tile0Tex = 0; }
   if(mode7WindowTex) { glDeleteTextures(1, &mode7WindowTex); mode7WindowTex = 0; }
+  mode7MapReady = false;
+  mode7MapHash = 0;
   if(buffer) { delete[] buffer; buffer = nullptr; }
   initialized = false;
 }

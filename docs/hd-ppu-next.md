@@ -89,36 +89,54 @@ Fast↔HD power-cycle. Accurate stays incompatible with scanline states.
 
 ### Tests
 
-`tests/hd-ppu` covers packing, GLSL compilation/linking, GPU compositing,
-configurable supersampling, raw-texel magnification, extreme horizontal/vertical
-minification, and fixed-colour ramp boundaries. Run with
-`EGL_PLATFORM=surfaceless make -C tests/hd-ppu run` on a headless Linux host.
-The real shader must compile and render; a skipped GL context is not a GPU pass.
+Picture rules live in `.grok/skills/hd-ppu/SKILL.md`. The capture recipe
+lives in `.grok/skills/hd-ppu-visual/SKILL.md`. This section is the inventory
+of what has actually been run. `/tmp` PPM/PNG/sidecars are ROM-derived
+scratch — do not commit them, and do not treat them as the record.
 
-The September 2026 regression work uses `a292184b9` (fog), `a22b0b3d2`
-(F-Zero filtering), and `aab3d06c9` (Mario Kart footprint) as visual references.
-The implementation retains sharp raw texels in magnification, integrates
-texel crossings along the more compressed screen axis on the GPU, and reconstructs
-short monotonic fixed-colour ramps without changing emulated IO or save states.
-The CPU Mode 7 sampling algorithm remains unchanged.
+#### Automated (`tests/hd-ppu`)
 
-Verified scenes: F-Zero Quick Slot 2 and Mario Kart two-player Quick Slot 1
-in real 2560x1440 fullscreen, both immediately and after the initial fades;
-Castlevania IV 4-3 cylinder and the saved 4-2 room; HD+CPU on XShm (no OpenGL).
-The complete game table above, a full 4-2 rotation sequence, and sustained
-performance/motion testing still need coverage. These captures are not a
-claim that every Mode 7 game or effect has been validated.
+`EGL_PLATFORM=surfaceless make -C tests/hd-ppu run`
 
-For GPU captures, `BSNES_DUMP_FULLSCREEN=1` waits for the real viewport.
-`BSNES_DUMP_GPU_AFTER=N` delays capture until N eligible presentations
-(default 8); use a larger value to get past a saved fade-in. Capture sidecars
-contain the matching line uniforms, VRAM, palette and output geometry for
-inspecting sampling errors. Do not commit ROM-derived capture data.
+Locks packing, GLSL compile/link, GPU compositing (`ss=1` unique ≥ 2 vs
+`ss=8` a different average), live `decodeVram`, no `if(!aboveWin) rgb=0`,
+flush-wipe policy, luma clamp, `integrateM7`, no gaussian (`exp(-2.0)`) or
+3× taper (`1.0 + 2.0 * taper`), extreme minification max channel error ≤ 1
+(including negative/wrapped and X-compressed), magnification matching a
+12×12 raw-texel grid, and COLDATA ramp reconstruction (monotonic 2–8 line
+plateaus; reverse/window/math/group edges stay discrete). The real shader
+must compile and render; a skipped GL context is not a GPU pass.
+
+Last run: 103 passed, 0 failed.
+
+#### Visual (real 2560×1440 bsnes `--fullscreen`)
+
+Geometry of a valid dump is `256 224 1877 1440 2560 1440` (SNES / target /
+output). Smaller than 1920 wide means the dump ran windowed.
+
+| Scene | How | Result |
+|---|---|---|
+| F-Zero Slot 2 race | `--fullscreen`, `DUMP_FULLSCREEN=1`, `DUMP_GPU_AFTER=8` | Signed-off: crisp checker/dashes, no scanline bands, interpolated fog intended |
+| MK Slot 1 2-player | `--fullscreen`, same | Signed-off: diamond dirt, stable far infield, perspective |
+| MK Slot 1 windowed→fullscreen | no `--fullscreen`; `TOGGLE_FS_AFTER=40`; `DUMP_GPU_AFTER=1` then `30` | Signed-off: first FS frame already GPU Mode 7; no rainbow CPU blit |
+| CV4 4-3 cylinder / saved 4-2 room | earlier `--fullscreen` dumps | Captured once; **not** re-signed against the current crisp filter |
+| HD+CPU on XShm | no OpenGL 3.2 | Captured once; re-check after the fullscreen bind change |
+
+Filter look: `0f250f287` (kernel = one output pixel; integrate only texels
+already inside it). Fullscreen present-path: `Program::bindGpuMode7` on
+`videoFrame` and `viewportRefresh`; `OpenGL::terminate` clears
+`mode7MapReady`; GLX `initialize` presents black before the first Mode 7
+frame. The CPU Mode 7 sampling algorithm remains unchanged.
+
+Still untested vs the game table: Pilotwings, Axelay, FF6 world map,
+Contra III EXTBG, Chrono Trigger, and the rest. A full 4-2 rotation
+sequence and sustained performance/motion testing still need coverage.
 
 ### Purge debug stuff (last)
 
-Leave `BSNES_DUMP_FRAME` and `BSNES_LOAD_STATE` until the rest of list 1 is
-done, then strip them.
+Leave `BSNES_DUMP_FRAME`, `BSNES_LOAD_STATE`, `BSNES_DUMP_GPU`,
+`BSNES_DUMP_FULLSCREEN`, `BSNES_DUMP_GPU_AFTER`, and
+`BSNES_TOGGLE_FS_AFTER` until the rest of list 1 is done, then strip them.
 
 ## List 2 — follow-ups (not this HD desktop slice)
 

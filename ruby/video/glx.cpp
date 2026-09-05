@@ -267,7 +267,15 @@ private:
     _doubleBuffer = value;
     _isDirect = glXIsDirect(_display, _glXContext);
 
-    return _ready = OpenGL::initialize(self.shader);
+    _ready = OpenGL::initialize(self.shader);
+    // Fullscreen recreates the GLX window. Present black immediately so the
+    // user never sees an uncomposited CPU blit (MK far grass rainbow) while
+    // the first Mode 7 frame is still in flight.
+    if(_ready) {
+      OpenGL::clear();
+      if(_doubleBuffer) glXSwapBuffers(_display, _glXWindow);
+    }
+    return _ready;
   }
 
   auto terminate() -> void {

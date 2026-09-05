@@ -125,6 +125,15 @@ auto Program::updateVideoEffects() -> void {
   emulator->configure("Video/BlurEmulation", settings.video.blur);
 }
 
+auto Program::bindGpuMode7() -> void {
+  if(auto g = emulator->gpuMode7(); g.active && g.vram && g.palette && g.lines) {
+    float lineOrigin = (g.overscan ? 0.0f : -7.0f) + (settings.video.overscan ? 0.0f : 8.0f);
+    video.setMode7Gpu(true, g.ss, lineOrigin, g.vram, g.palette, g.tile0, g.lines, g.colorWindow, g.mapHash, g.luma);
+  } else {
+    video.setMode7Gpu(false);
+  }
+}
+
 auto Program::toggleVideoFullScreen() -> void {
   if(!video.hasFullScreen()) return;
   if(presentation.fullScreen()) return;

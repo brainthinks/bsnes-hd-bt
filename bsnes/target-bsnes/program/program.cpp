@@ -94,6 +94,13 @@ auto Program::main() -> void {
 
   inputManager.poll();
   inputManager.pollHotkeys();
+  if(auto after = getenv("BSNES_TOGGLE_FS_AFTER")) {
+    static uint frames = 0;
+    uint want = (uint)max(1, atoi(after));
+    if(++frames == want && emulator->loaded() && !video.fullScreen()) {
+      toggleVideoFullScreen();
+    }
+  }
 
   static bool previouslyInactive = true;
   bool currentlyInactive = inactive();

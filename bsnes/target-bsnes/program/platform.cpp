@@ -273,14 +273,7 @@ auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height
       memory::copy<uint32>(output + y * dstPitch, data + y * pixelPitch, width);
     }
     video.release();
-    if(auto g = emulator->gpuMode7(); g.active && g.vram && g.palette && g.lines) {
-      // PPU scanline y at the top of the presented texture: game overscan
-      // pads the 224-line screen by 7 rows, and the UI overscan option crops 8.
-      float lineOrigin = (g.overscan ? 0.0f : -7.0f) + (settings.video.overscan ? 0.0f : 8.0f);
-      video.setMode7Gpu(true, g.ss, lineOrigin, g.vram, g.palette, g.tile0, g.lines, g.colorWindow, g.mapHash, g.luma);
-    } else {
-      video.setMode7Gpu(false);
-    }
+    bindGpuMode7();
     video.output(outputWidth, outputHeight);
   }
 

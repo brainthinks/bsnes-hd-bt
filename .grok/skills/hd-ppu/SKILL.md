@@ -25,15 +25,17 @@ Accurate and Fast stay hardware-accurate and must not change. HD is opt-in.
    compile, empty atlas). The user must still *see the enhancement* when GPU
    is selected and working — a CPU 1× fallback that looks like Fast is not
    “HD working.”
-3. **No blur, banding, or noise** — all three are regressions. Minification
-   must be a stable average of **raw texels**, not sparkle, scanline bands,
-   or rainbow moiré, and not a softened mush. A 1-SNES-pixel kernel, atlas
-   mips, or a 2×2 VRAM box across the floor removes bands by blurring; that
-   is wrong. If a filter makes F-Zero grass look out of focus, revert it.
-   Iterate on **bsnes fullscreen** captures (`--fullscreen`, real viewport)
-   using `.grok/skills/hd-ppu-visual/SKILL.md` — do not ask the user to
-   eyeball every attempt, and do not treat maximize or a fake `DUMP_W/H`
-   FBO as fullscreen.
+3. **Crisp raw pixels. Always.** The user wants to see individual Mode 7
+   texels, never colors melted together. Magnified grass, dirt, and dashes
+   must look nearest-neighbor / in-texel SS — hard edges, two-color
+   checkers, pixel-sharp rings. Do not gaussian, bilinear, mip, 2×2 VRAM
+   box, 1-SNES kernel, or expand filter support into neighboring output
+   pixels. Mixing neighboring texels to “kill banding” is a fail even if
+   the floor is stable. Banding and noise are also regressions; fix them
+   without blur. If F-Zero grass looks out of focus, revert. Iterate on
+   **bsnes fullscreen** (`--fullscreen`, real viewport) using
+   `.grok/skills/hd-ppu-visual/SKILL.md`. Do not ask the user to eyeball
+   every attempt. Maximize and a fake `DUMP_W/H` FBO are not fullscreen.
 4. **All games** — F-Zero is not enough. Super Mario Kart, Castlevania IV,
    Contra III (EXTBG), Pilotwings, and the rest of the game table in
    `docs/hd-ppu-next.md` must keep their Mode 7 (and non-Mode-7 HD) features.
@@ -51,12 +53,33 @@ Accurate and Fast stay hardware-accurate and must not change. HD is opt-in.
 - CPU 1× Mode 7 under GPU is a *fallback*, not the HD look. If GPU SS is on
   and the picture matches official Fast, the GPU pass is not compositing —
   fix that, do not ship it.
+- GPU Mode 7 must be bound on every present (`bindGpuMode7` from `videoFrame`
+  and `viewportRefresh`). `--fullscreen` recreates GLX; after reinit present
+  black until the first GPU Mode 7 frame. Never stretch the CPU 256×224 blit
+  to the monitor — that is the Mario Kart rainbow far-grass flash.
 
 ## Verify
 
-- F-Zero race **in bsnes fullscreen**: SS floor, fog, no red-tint, no
-  banding, no blur.
-- Super Mario Kart **in bsnes fullscreen**: track texture present **and**
-  supersampled, including 2-player; no rainbow far grass, no smeared dirt.
+F-Zero Slot 2 and Mario Kart Slot 1 in real bsnes fullscreen are the
+signed-off look (banding, clear pixels, perspective). Recapture both after
+any filter, present-path, or GLX change. Do not “improve” them with blur,
+mips, atlas color, or a 1-SNES kernel.
+
+- **F-Zero Slot 2 race, `--fullscreen`**: sharp 2-color checker up close,
+  pixel-sharp yellow dashes, far field stable (no scanline stripes, no mushy
+  seam). Interpolated COLDATA fog is intended true-color, not a bug.
+- **Super Mario Kart Slot 1 (2-player), `--fullscreen` and windowed →
+  fullscreen toggle**: diamond dirt, stable dotted far infield, track
+  supersampled. The first fullscreen frame must already be GPU Mode 7 —
+  never a rainbow stretched CPU blit that later “corrects itself.”
+
+Still required, not a signed-off look:
+
 - CV4 4-2 rotation and 4-3 cylinder vs official Fast.
+- Remaining games in the `docs/hd-ppu-next.md` table (Pilotwings, Axelay,
+  FF6 world map, Contra III EXTBG, Chrono Trigger, …).
 - Fast/Accurate unchanged; HD+CPU still runs without OpenGL 3.2.
+
+Automated locks: `make -C tests/hd-ppu run`. Visual recipe:
+`.grok/skills/hd-ppu-visual/SKILL.md`. What has been run lives in
+`docs/hd-ppu-next.md` Tests.
