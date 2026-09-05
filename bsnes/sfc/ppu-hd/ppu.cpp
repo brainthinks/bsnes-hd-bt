@@ -193,9 +193,9 @@ auto PPU::refresh() -> void {
           for(uint row : range(height)) {
             for(uint col : range(width)) {
               uint32 c = src[col];
-              fputc(c >>  0 & 255, fp);
-              fputc(c >>  8 & 255, fp);
               fputc(c >> 16 & 255, fp);
+              fputc(c >>  8 & 255, fp);
+              fputc(c >>  0 & 255, fp);
             }
             src += pitch;
           }
@@ -233,7 +233,12 @@ auto PPU::prepareGpuMode7() -> void {
     if(!HDMode7::lineIsValid(gpuMode7.lines[y * HDMode7::lineFloats + HDMode7::lineValidIndex])) continue;
     uint b = lines[y].io.displayBrightness;
     if(b > bright) bright = b;
+    // Restore raw IO colours before preparing a ramp, including redraws
+    // of a paused frame. Re-filtering prepared uniforms would drift.
+    HDMode7::rgbFromPacked(lines[y].decode(lines[y].io.col.fixedColor),
+      gpuMode7.lines + y * HDMode7::lineFloats + 17);
   }
+  if(hdTrueColor()) HDMode7::reconstructColorRamps(gpuMode7.lines, gpuMode7.colorWindow);
   if(!bright) bright = io.displayBrightness;
   gpuMode7.luma = (float)bright / 15.0f;
   auto table = lightTable[15];

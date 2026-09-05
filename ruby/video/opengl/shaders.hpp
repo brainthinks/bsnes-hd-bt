@@ -223,6 +223,18 @@ static string OpenGLMode7FragmentShader = R"(
     if(texel.a < 0.02 && texel.r + texel.g + texel.b < 0.01) return vec4(0.0);
     int wx = int(clamp(snes.x, 0.0, 255.0));
     vec3 rgb = applyMath(texel.rgb, y, wx);
+    // HDMA fog changes at SNES scanlines. Reconstruct its continuous
+    // colour ramp at the sample position, without filtering the texture
+    // or blending across a Mode 7 / color-window boundary.
+    int nextY = min(y + 1, 239);
+    vec4 nextMode = texelFetch(mode7Lines, ivec2(3, nextY), 0);
+    vec4 math = texelFetch(mode7Lines, ivec2(4, y), 0);
+    vec4 nextMath = texelFetch(mode7Lines, ivec2(4, nextY), 0);
+    if(nextMode.w >= 1.5 && math.x == nextMath.x
+    && texelFetch(mode7Window, ivec2(wx, y), 0).r
+      == texelFetch(mode7Window, ivec2(wx, nextY), 0).r) {
+      rgb = mix(rgb, applyMath(texel.rgb, nextY, wx), fract(snes.y));
+    }
     // Palette is already lightTable[15]. Per-line brightness is a dimming
     // factor. vblank INIDISP is often 0; never let that zero the track.
     float luma = mode7Luma;
@@ -237,6 +249,50 @@ static string OpenGLMode7FragmentShader = R"(
     int y;
     if(!projectM7(snes, uv, repeatMode, y)) return vec4(0.0);
     return shadeM7(sampleMap(uv, repeatMode, duvdx, duvdy), snes, y);
+  }
+
+  // Integrate the piecewise-constant raw texture along one short screen
+  // sample interval. Far HDMA floors can cross tens of texels per output
+  // pixel: increasing a point filter's support without integrating these
+  // texels just aliases a different set of them. Subdivision by ss keeps
+  // the local projective approximation short and the work on the GPU.
+  vec4 integrateM7(vec2 snes, vec2 interval) {
+    vec2 a, b;
+    int ra, rb, ya, yb;
+    bool va = projectM7(snes - interval * 0.5, a, ra, ya);
+    bool vb = projectM7(snes + interval * 0.5, b, rb, yb);
+    if(!va || !vb || ra != rb
+    || texelFetch(mode7Lines, ivec2(2, ya), 0) != texelFetch(mode7Lines, ivec2(2, yb), 0)
+    || texelFetch(mode7Lines, ivec2(3, ya), 0) != texelFetch(mode7Lines, ivec2(3, yb), 0))
+      return sampleM7(snes, vec2(0.0), vec2(0.0));
+    vec2 delta = b - a;
+    if(abs(delta.x) + abs(delta.y) > 512.0)
+      return sampleM7(snes, vec2(0.0), vec2(0.0));
+    vec2 next = vec2(2.0);
+    vec2 stride = vec2(2.0);
+    if(abs(delta.x) > 1.0e-6) {
+      stride.x = 1.0 / abs(delta.x);
+      next.x = (floor(a.x) + (delta.x > 0.0 ? 1.0 : 0.0) - a.x) / delta.x;
+    }
+    if(abs(delta.y) > 1.0e-6) {
+      stride.y = 1.0 / abs(delta.y);
+      next.y = (floor(a.y) + (delta.y > 0.0 ? 1.0 : 0.0) - a.y) / delta.y;
+    }
+    vec4 sum = vec4(0.0);
+    float t = 0.0;
+    int y = int(clamp(snes.y, 0.0, 239.0));
+    for(int cell = 0; cell < 516; cell++) {
+      float end = min(1.0, min(next.x, next.y));
+      if(end > t) {
+        vec2 uv = a + delta * ((t + end) * 0.5);
+        sum += shadeM7(sampleMap(uv, ra, vec2(0.0), vec2(0.0)), snes, y) * (end - t);
+      }
+      if(end >= 1.0) break;
+      if(next.x <= next.y) next.x += stride.x;
+      else next.y += stride.y;
+      t = end;
+    }
+    return sum;
   }
 
   void main() {
@@ -257,22 +313,62 @@ static string OpenGLMode7FragmentShader = R"(
     // into a checker. Keep at least the ~4.5× windowed footprint. This is
     // not a 1-SNES-pixel blur (that smeared F-Zero).
     vec2 kernel = max(pixel, vec2(256.0 / 1280.0, snesH / 960.0));
+    // Taper only a minified axis. Magnified texels retain the existing
+    // box SS footprint; applying bilinear filtering there softened the
+    // track markers. Measure vertical projection over a whole scanline
+    // so the derivative includes HDMA, and do not bridge line groups.
+    vec2 centerUV, rightUV, belowUV;
+    int centerRepeat, centerLine, otherRepeat, otherLine;
+    vec2 minification = vec2(0.0);
+    if(projectM7(snes, centerUV, centerRepeat, centerLine)) {
+      if(projectM7(snes + vec2(pixel.x, 0.0), rightUV, otherRepeat, otherLine)) {
+        vec2 crossed = abs(rightUV - centerUV);
+        minification.x = crossed.x + crossed.y;
+      }
+      if(projectM7(snes + vec2(0.0, 1.0), belowUV, otherRepeat, otherLine)
+      && otherRepeat == centerRepeat
+      && texelFetch(mode7Lines, ivec2(2, centerLine), 0)
+        == texelFetch(mode7Lines, ivec2(2, otherLine), 0)
+      && texelFetch(mode7Lines, ivec2(3, centerLine), 0)
+        == texelFetch(mode7Lines, ivec2(3, otherLine), 0)) {
+        vec2 crossed = abs(belowUV - centerUV);
+        minification.y = (crossed.x + crossed.y) * pixel.y;
+      }
+    }
+    // Count crossings on both texture axes: a rotated checker reaches
+    // the sampling limit sooner than the Euclidean vector length suggests.
+    vec2 taper = smoothstep(vec2(0.5), vec2(1.0), minification);
     int n = ss < 1 ? 1 : ss;
     if(n > 16) n = 16;
+    // Integrate the more compressed screen axis. The other axis still
+    // uses point samples and needs two taps per projected texel.
+    vec2 footprint = minification * kernel / pixel;
+    vec2 budgetTaper = clamp((float(n) / (2.0 * max(footprint, vec2(1.0e-6))) - 1.0) * 0.5, 0.0, 1.0);
+    bool integrateY = footprint.y >= footprint.x;
+    if(integrateY) taper.x = min(taper.x, budgetTaper.x);
+    else taper.y = min(taper.y, budgetTaper.y);
+    if(n == 1) taper = vec2(0.0);
+    bool integrateAxis = (integrateY ? taper.y : taper.x) > 0.0;
+    vec2 interval = kernel * (1.0 + 2.0 * taper) / float(n);
+    interval *= integrateY ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
     vec4 acc = vec4(0.0);
     float hits = 0.0;
     for(int j = 0; j < n; j++) {
       for(int i = 0; i < n; i++) {
         vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
+        o *= 1.0 + 2.0 * taper;
+        float weight = exp(-2.0 * dot(o * o, taper));
         vec2 s = snes + o * kernel;
         vec2 uv;
         int repeatMode;
         int y;
         if(!projectM7(s, uv, repeatMode, y)) continue;
-        vec4 c = shadeM7(sampleMap(uv, repeatMode, vec2(0.0), vec2(0.0)), s, y);
+        vec4 c = integrateAxis
+          ? integrateM7(s, interval)
+          : shadeM7(sampleMap(uv, repeatMode, vec2(0.0), vec2(0.0)), s, y);
         if(c.a > 0.01) {
-          acc += c;
-          hits += 1.0;
+          acc += c * weight;
+          hits += c.a * weight;
         }
       }
     }

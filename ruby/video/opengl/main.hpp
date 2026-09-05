@@ -361,7 +361,16 @@ auto OpenGL::outputMode7() -> bool {
       }
     }
     static uint dumped = 0;
-    if(++dumped >= 8) {
+    GLint captureViewport[4] = {};
+    glGetIntegerv(GL_VIEWPORT, captureViewport);
+    bool captureReady = !getenv("BSNES_DUMP_FULLSCREEN")
+      || (captureViewport[2] >= 1920 && captureViewport[3] >= 1000);
+    uint captureAfter = 8;
+    if(auto value = getenv("BSNES_DUMP_GPU_AFTER")) {
+      int requested = atoi(value);
+      if(requested > 0) captureAfter = (uint)requested;
+    }
+    if(captureReady && ++dumped >= captureAfter) {
       int w = 0, h = 0;
       uint8_t* px = nullptr;
       int dw = getenv("BSNES_DUMP_W") ? atoi(getenv("BSNES_DUMP_W")) : 0;
@@ -399,6 +408,23 @@ auto OpenGL::outputMode7() -> bool {
         }
       }
       if(px && w > 0 && h > 0) {
+        if(auto fp = fopen(string{dump, ".lines.bin"}, "wb")) {
+          fwrite(mode7Lines, sizeof(float), 240 * 24, fp);
+          fclose(fp);
+        }
+        if(auto fp = fopen(string{dump, ".vram.bin"}, "wb")) {
+          fwrite(mode7Vram, sizeof(uint16_t), 16384, fp);
+          fclose(fp);
+        }
+        if(auto fp = fopen(string{dump, ".palette.bin"}, "wb")) {
+          fwrite(mode7Palette, sizeof(uint32_t), 256, fp);
+          fclose(fp);
+        }
+        if(auto fp = fopen(string{dump, ".geometry.txt"}, "w")) {
+          fprintf(fp, "%u %u %u %u %u %u %.9g\n", width, height,
+            targetWidth, targetHeight, outputWidth, outputHeight, mode7LineOrigin);
+          fclose(fp);
+        }
         if(auto fp = fopen(dump, "wb")) {
           fprintf(fp, "P6\n%d %d\n255\n", w, h);
           for(int y = h - 1; y >= 0; y--) {

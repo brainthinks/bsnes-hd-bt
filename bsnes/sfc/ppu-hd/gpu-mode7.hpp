@@ -75,6 +75,47 @@ inline auto lineIsValid(float ofw) -> bool {
   return ofw >= lineValidMin;
 }
 
+// Reconstruct short quantized fixed-colour ramps in the GPU's 240 scanline
+// uniforms. This never filters texels or alters emulated IO. Call with raw
+// colours each frame; the fragment shader interpolates the resulting knots.
+inline auto reconstructColorRamps(float* lines, const std::uint8_t* windows) -> void {
+  float raw[240][3];
+  for(int y = 0; y < 240; y++) for(int c = 0; c < 3; c++) raw[y][c] = lines[y * lineFloats + 17 + c];
+  auto compatible = [&](int a, int b) {
+    const float* p = lines + a * lineFloats;
+    const float* q = lines + b * lineFloats;
+    if(!lineIsValid(p[15]) || !lineIsValid(q[15]) || p[16] != q[16]) return false;
+    if((int(p[16]) & 9) != 1) return false;  // fixed-colour math only
+    for(int c = 8; c < 16; c++) if(p[c] != q[c]) return false;
+    for(int x = 0; x < 256; x++) if(windows[a * 256 + x] != windows[b * 256 + x]) return false;
+    return true;
+  };
+  auto equal = [&](int a, int b) {
+    return raw[a][0] == raw[b][0] && raw[a][1] == raw[b][1] && raw[a][2] == raw[b][2];
+  };
+  for(int first = 0; first < 240;) {
+    int next = first + 1;
+    while(next < 240 && compatible(first, next) && equal(first, next)) next++;
+    int count = next - first;
+    bool ramp = count > 1 && count <= 8 && next < 240 && compatible(first, next);
+    if(ramp && first > 0 && compatible(first - 1, first)) {
+      float direction = 0.0f;
+      for(int c = 0; c < 3; c++) {
+        float product = (raw[first][c] - raw[first - 1][c]) * (raw[next][c] - raw[first][c]);
+        if(product < 0.0f) ramp = false;
+        direction += product;
+      }
+      if(direction <= 0.0f) ramp = false;
+    }
+    if(ramp) for(int y = first + 1; y < next; y++) {
+      float t = float(y - first) / float(count);
+      for(int c = 0; c < 3; c++)
+        lines[y * lineFloats + 17 + c] = raw[first][c] + (raw[next][c] - raw[first][c]) * t;
+    }
+    first = next;
+  }
+}
+
 // writeVRAM/writeOAM flush with start > 1. Clearing all 240 lines there
 // dropped Mode 7 matrices before present (SMK looked like Fast nearest).
 inline auto gpuFlushClearsAll(std::uint32_t start) -> bool {

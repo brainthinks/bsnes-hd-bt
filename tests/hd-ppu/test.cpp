@@ -331,6 +331,43 @@ static auto testShaderSource(const std::string& path) -> void {
 #endif
 }
 
+static auto testColorRamps() -> void {
+  std::vector<float> lines(240 * HDMode7::lineFloats, 0.0f);
+  std::vector<std::uint8_t> windows(240 * 256, 3);
+  auto setup = [&] {
+    std::fill(lines.begin(), lines.end(), 0.0f);
+    std::fill(windows.begin(), windows.end(), 3);
+    const float colors[] = {1.0f, 1.0f, .8f, .8f, .6f, .6f, .4f, .4f, .9f, .9f};
+    for(int y = 0; y < 10; y++) {
+      float* p = lines.data() + y * HDMode7::lineFloats;
+      p[9] = 10;
+      p[15] = HDMode7::packLineValid(false);
+      p[16] = 3;
+      p[17] = p[18] = colors[y];
+    }
+  };
+  auto red = [&](int y) { return lines[y * HDMode7::lineFloats + 17]; };
+  setup();
+  HDMode7::reconstructColorRamps(lines.data(), windows.data());
+  CHECK(std::abs(red(1) - .9f) < 1e-6f);
+  CHECK(std::abs(red(3) - .7f) < 1e-6f);
+  CHECK(std::abs(red(5) - .5f) < 1e-6f);
+  CHECK(red(7) == .4f);  // colour direction reversal is not a fog ramp
+  CHECK(red(9) == .9f);  // do not blend into an invalid/non-Mode-7 line
+  setup();
+  windows[3 * 256 + 42] = 0;
+  HDMode7::reconstructColorRamps(lines.data(), windows.data());
+  CHECK(red(3) == .8f);
+  setup();
+  lines[4 * HDMode7::lineFloats + 16] = 1;  // subtract -> add
+  HDMode7::reconstructColorRamps(lines.data(), windows.data());
+  CHECK(red(3) == .8f);
+  setup();
+  lines[4 * HDMode7::lineFloats + 9] = 11;  // new projection group
+  HDMode7::reconstructColorRamps(lines.data(), windows.data());
+  CHECK(red(3) == .8f);
+}
+
 #ifdef HD_PPU_GL
 #ifndef GL_RGBA32F
 #define GL_RGBA32F 0x8814
@@ -515,6 +552,131 @@ static auto testMode7Render(const std::string& frag) -> void {
   CHECK(ss1 != ss8);
   CHECK(lit0 > d.w * d.h / 4);
   CHECK(luma0 == ss8);
+  // A minified blue/green checker must stay a stable average rather than acquiring coloured
+  // sampling beats when the filter support exceeds the tap budget.
+  int farErrors = 0;
+  for(size_t i = 0; i < ss8.size(); i += 4) {
+    if(std::abs(int(ss8[i + 1]) - 128) > 1
+    || std::abs(int(ss8[i + 2]) - 128) > 1) farErrors++;
+  }
+  CHECK(farErrors == 0);
+
+  // Extreme vertical minification: each output pixel spans about 149
+  // raw texels. A 12x12 point grid aliases; interval integration must
+  // converge to the checker average without a mipmap or a CPU atlas.
+  for(int y = 0; y < 240; y++) {
+    float* p = lines.data() + y * HDMode7::lineFloats;
+    p[0] = p[4] = 16.0f;
+    p[3] = p[7] = 8192.0f;
+  }
+  glBindTexture(GL_TEXTURE_2D, d.lines);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, lines.data());
+  auto distant = drawMode7(d, 12, 1.0f);
+  int maxDistantError = 0;
+  for(size_t i = 0; i < distant.size(); i += 4) {
+    maxDistantError = std::max(maxDistantError, std::abs(int(distant[i + 1]) - 128));
+    maxDistantError = std::max(maxDistantError, std::abs(int(distant[i + 2]) - 128));
+  }
+  std::printf("integrated minification max channel error=%d\n", maxDistantError);
+  CHECK(maxDistantError <= 1);
+  distant = drawMode7(d, 2, 1.0f);
+  maxDistantError = 0;
+  for(size_t i = 0; i < distant.size(); i += 4)
+    maxDistantError = std::max(maxDistantError, std::abs(int(distant[i + 1]) - 128));
+  CHECK(maxDistantError <= 1);
+
+  for(int y = 0; y < 240; y++) {
+    float* p = lines.data() + y * HDMode7::lineFloats;
+    p[0] = p[4] = -8192.0f;
+    p[3] = p[7] = 16.0f;
+  }
+  glBindTexture(GL_TEXTURE_2D, d.lines);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, lines.data());
+  distant = drawMode7(d, 12, 1.0f);
+  maxDistantError = 0;
+  for(size_t i = 0; i < distant.size(); i += 4)
+    maxDistantError = std::max(maxDistantError, std::abs(int(distant[i + 1]) - 128));
+  CHECK(maxDistantError <= 1);  // negative traversal and wrapped coordinates
+  // Transpose the compression: rotated scenes need the same integration
+  // quality along X rather than assuming every Mode 7 surface is a floor.
+  for(int y = 0; y < 240; y++) {
+    float* p = lines.data() + y * HDMode7::lineFloats;
+    p[0] = p[4] = 8192.0f;
+    p[3] = p[7] = 16.0f;
+  }
+  glBindTexture(GL_TEXTURE_2D, d.lines);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, lines.data());
+  distant = drawMode7(d, 12, 1.0f);
+  maxDistantError = 0;
+  for(size_t i = 0; i < distant.size(); i += 4)
+    maxDistantError = std::max(maxDistantError, std::abs(int(distant[i + 1]) - 128));
+  CHECK(maxDistantError <= 1);
+
+  // Magnification must retain raw-texel box supersampling, rather than
+  // bilinear/gaussian blur. Compare every pixel with an independent CPU
+  // integral over the requested 12x12 sample grid of a two-colour map.
+  for(int y = 0; y < 240; y++) {
+    float* p = lines.data() + y * HDMode7::lineFloats;
+    p[0] = p[3] = p[4] = p[7] = 16.0f;
+  }
+  glBindTexture(GL_TEXTURE_2D, d.lines);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, lines.data());
+  auto near = drawMode7(d, 12, 1.0f);
+  int nearErrors = 0;
+  for(int y = 0; y < d.h; y++) for(int x = 0; x < d.w; x++) {
+    int green = 0;
+    for(int j = 0; j < 12; j++) for(int i = 0; i < 12; i++) {
+      double sx = (x + (i + 0.5) / 12.0) * 256.0 / d.w;
+      double sy = (y + (j + 0.5) / 12.0) * 224.0 / d.h;
+      int tx = int(std::floor((sx - 0.5) / 16.0));
+      int ty = int(std::floor((sy - 0.5) / 16.0));
+      green += (tx + ty) & 1;
+    }
+    int expected = (green * 255 + 72) / 144;
+    size_t offset = (y * d.w + x) * 4;
+    if(near[offset] != 0 || std::abs(int(near[offset + 1]) - expected) > 1
+    || std::abs(int(near[offset + 2]) - (255 - expected)) > 1) nearErrors++;
+  }
+  CHECK(nearErrors == 0);
+  for(int y = 0; y < 240; y++) {
+    float* p = lines.data() + y * HDMode7::lineFloats;
+    p[0] = p[3] = p[4] = p[7] = 256.0f;
+  }
+
+  // A constant texture isolates HDMA fog from texture antialiasing.
+  // At output rows between SNES lines the ramp must retain intermediate
+  // 24-bit colours, but a window or Mode 7 boundary must stay discrete.
+  pal[1] = pal[2] = 0xffffffffu;
+  glBindTexture(GL_TEXTURE_2D, d.pal);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, pal);
+  std::fill(win.begin(), win.end(), 3);
+  glBindTexture(GL_TEXTURE_2D, d.win);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 240, GL_RED, GL_UNSIGNED_BYTE, win.data());
+  for(int y = 0; y < 240; y++) {
+    float* p = lines.data() + y * HDMode7::lineFloats;
+    p[16] = 3.0f;
+    p[17] = p[18] = p[19] = float(y & 1) * 0.5f;
+  }
+  auto uploadLines = [&] {
+    glBindTexture(GL_TEXTURE_2D, d.lines);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 6, 240, GL_RGBA, GL_FLOAT, lines.data());
+  };
+  uploadLines();
+  auto fog = drawMode7(d, 1, 1.0f);
+  // First output row samples y=224/48/2=2+1/3: white minus 1/6.
+  CHECK(fog[0] >= 211 && fog[0] <= 214);
+  CHECK(fog[0] == fog[1] && fog[1] == fog[2]);
+  lines[3 * HDMode7::lineFloats + 15] = 0.0f;
+  uploadLines();
+  auto edge = drawMode7(d, 1, 1.0f);
+  CHECK(edge[0] == 255);
+  lines[3 * HDMode7::lineFloats + 15] = HDMode7::packLineValid(false);
+  uploadLines();
+  std::fill(win.begin() + 3 * 256, win.begin() + 4 * 256, 0);
+  glBindTexture(GL_TEXTURE_2D, d.win);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 240, GL_RED, GL_UNSIGNED_BYTE, win.data());
+  edge = drawMode7(d, 1, 1.0f);
+  CHECK(edge[0] == 255);
 
   glDeleteProgram(prog);
   glDeleteFramebuffers(1, &d.fbo);
@@ -527,6 +689,7 @@ static auto testMode7Render(const std::string& frag) -> void {
 auto main(int argc, char** argv) -> int {
   const char* shaderPath = argc > 1 ? argv[1] : "../../ruby/video/opengl/shaders.hpp";
   testPacking();
+  testColorRamps();
   testShaderSource(shaderPath);
 #ifdef HD_PPU_GL
   auto file = readFile(shaderPath);

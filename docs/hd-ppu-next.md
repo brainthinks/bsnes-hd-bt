@@ -89,9 +89,31 @@ Fast↔HD power-cycle. Accurate stays incompatible with scanline states.
 
 ### Tests
 
-There are **no** automated HD / Mode 7 / PPU visual tests. CI only compiles.
-Coverage so far is manual F-Zero title screenshots. Test the core game table
-vs official Fast, with GPU SS on.
+`tests/hd-ppu` covers packing, GLSL compilation/linking, GPU compositing,
+configurable supersampling, raw-texel magnification, extreme horizontal/vertical
+minification, and fixed-colour ramp boundaries. Run with
+`EGL_PLATFORM=surfaceless make -C tests/hd-ppu run` on a headless Linux host.
+The real shader must compile and render; a skipped GL context is not a GPU pass.
+
+The September 2026 regression work uses `a292184b9` (fog), `a22b0b3d2`
+(F-Zero filtering), and `aab3d06c9` (Mario Kart footprint) as visual references.
+The implementation retains sharp raw texels in magnification, integrates
+texel crossings along the more compressed screen axis on the GPU, and reconstructs
+short monotonic fixed-colour ramps without changing emulated IO or save states.
+The CPU Mode 7 sampling algorithm remains unchanged.
+
+Verified scenes: F-Zero Quick Slot 2 and Mario Kart two-player Quick Slot 1
+in real 2560x1440 fullscreen, both immediately and after the initial fades;
+Castlevania IV 4-3 cylinder and the saved 4-2 room; HD+CPU on XShm (no OpenGL).
+The complete game table above, a full 4-2 rotation sequence, and sustained
+performance/motion testing still need coverage. These captures are not a
+claim that every Mode 7 game or effect has been validated.
+
+For GPU captures, `BSNES_DUMP_FULLSCREEN=1` waits for the real viewport.
+`BSNES_DUMP_GPU_AFTER=N` delays capture until N eligible presentations
+(default 8); use a larger value to get past a saved fade-in. Capture sidecars
+contain the matching line uniforms, VRAM, palette and output geometry for
+inspecting sampling errors. Do not commit ROM-derived capture data.
 
 ### Purge debug stuff (last)
 
