@@ -1,12 +1,59 @@
-# HD PPU remaining work
+# Remaining work
 
-Assume Mode 7 supersampling is complete (signed-off F-Zero Slot 2 and
-Mario Kart Slot 1 in real bsnes `--fullscreen`, tag `hd-ppu-01`).
-This file is what is left to **meet or exceed DerKoun bsnes-hd**.
+Product goals live in the README. This file is the gaps, constraints, and
+DerKoun-parity inventory behind that list.
 
 Picture rules: `.grok/skills/hd-ppu/SKILL.md`.
 Capture recipe: `.grok/skills/hd-ppu-visual/SKILL.md`.
 Earlier HD-desktop inventory: `docs/hd-ppu-next.md`.
+
+Assume Mode 7 supersampling is complete for the signed-off look (F-Zero
+Slot 2 and Mario Kart Slot 1 in real bsnes `--fullscreen`, tag `hd-ppu-01`).
+
+## README goals — gaps and constraints
+
+The README list is the right shape. What it does not spell out:
+
+**Standing rules** (enforced on every HD change; write them down or
+“max resolution” and “parity” get read as “change the Fast PPU”):
+
+- Accurate and Fast stay hardware-accurate, default, and unchanged. HD is opt-in.
+- HD is for every game, not a Mode 7 demo (true color, later widescreen, etc.).
+- Do not copy DerKoun’s blurry SS.
+
+**Mode 7 “max resolution”** is close to done (GPU offload, crisp pixels,
+configurable SS = `hd-ppu-01`). Remaining as a *goal*, not polish: it has
+to hold on the rest of the game table (Pilotwings, CV4, Contra III EXTBG,
+FF6, Chrono). EXTBG is still on the CPU path.
+
+**“Desirable bsnes-hd features”** currently names 24-bit (done) and
+widescreen (the gap). If those two *are* the list, say so. If “all
+desirable” is literal, the others already identified are: perspective
+width (Tales of Phantasia), HD→SD mosaic (Terranigma), HD windowing,
+per-game `.bso`, layer disable for screenshots. Widescreen without those
+knobs is not DerKoun HD for FF6/Terranigma.
+
+**Usable daily driver** is not on the README list and will block
+everything else:
+
+- Save states HD ↔ Fast without a power cycle; official Fast states still load.
+- Isolated HD settings (already done: `~/.config/bsnes-hd-bt/`).
+
+**Linux performance:** GPU Mode 7 *is* the Mode 7 performance goal.
+Separate from that, ALSA-null and the transparent viewport are already
+done. If this item means more than “Mode 7 doesn’t melt the CPU,” say
+what: fullscreen at 2560×1440, Steam Deck, no audio glitches, etc.
+
+**Modern controls:** SDL3 is a means. The user-facing goal is probably
+hotplug, DualSense/Steam Input, gyro/rumble, and not fighting udev.
+ruby already has SDL (2) plus udev/xlib.
+
+**Explicit non-goals:**
+
+- libretro / RetroArch
+- Rewriting the CPU Mode 7 sampler
+- Windows/macOS GPU (HD+CPU already works; GPU is Linux GLX today)
+- PRs to official bsnes
 
 ## Already at or beyond DerKoun
 
@@ -19,7 +66,7 @@ Earlier HD-desktop inventory: `docs/hd-ppu-next.md`.
 | Repeat 2/3, color math, windows on Mode 7 | In the GPU shader |
 
 This fork also has a third sibling PPU (Accurate / Fast / HD) and isolated
-HD settings (`~/.config/bsnes-hd/`). DerKoun had neither.
+HD settings (`~/.config/bsnes-hd-bt/`). DerKoun had neither.
 
 Exceeding DerKoun from here means doing widescreen on the GPU window path
 instead of CPU scale, and not copying DerKoun’s blurry SS. The signed-off

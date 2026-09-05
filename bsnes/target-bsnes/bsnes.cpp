@@ -9,11 +9,11 @@ auto locate(string name) -> string {
   string location = {Path::program(), name};
   if(inode::exists(location)) return location;
 
-  location = {Path::userData(), "bsnes/", name};
+  location = {Path::userData(), "bsnes-hd-bt/", name};
   if(inode::exists(location)) return location;
 
-  directory::create({Path::userSettings(), "bsnes/"});
-  return {Path::userSettings(), "bsnes/", name};
+  directory::create({Path::userSettings(), "bsnes-hd-bt/"});
+  return {Path::userSettings(), "bsnes-hd-bt/", name};
 }
 
 #include <nall/main.hpp>

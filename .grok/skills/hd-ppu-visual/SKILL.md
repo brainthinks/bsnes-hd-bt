@@ -33,11 +33,11 @@ Kill before launch and after every dump.
 
 ```bash
 # Copy settings and set Defocus Allow so an unfocused dump is not paused.
-# Do not edit ~/.config/bsnes-hd/settings.bml for this.
-BIN=/home/user/projects/bsnes-hd/bsnes/out/bsnes
+# Do not edit ~/.config/bsnes-hd-bt/settings.bml for this.
+BIN=/home/user/projects/bsnes-hd-bt/bsnes/out/bsnes
 SET=/tmp/bsnes-hd-visual.bml
 ROM_DIR=/media/user/2020_obs_capture/games/bsneshd/roms
-cp ~/.config/bsnes-hd/settings.bml "$SET"
+cp ~/.config/bsnes-hd-bt/settings.bml "$SET"
 # Defocus: Allow  (Input / Defocus)
 
 DISPLAY=:0 BSNES_LOAD_STATE="Quick/Slot 2" BSNES_DUMP_GPU=/tmp/fz-fs.ppm \
@@ -110,5 +110,5 @@ hd-ppu Verify.
 
 ## Settings that matter
 
-`~/.config/bsnes-hd/settings.bml`: OpenGL 3.2, HD, GpuSupersample true,
+`~/.config/bsnes-hd-bt/settings.bml`: OpenGL 3.2, HD, GpuSupersample true,
 SsFactor 12, TrueColor true. Test dumps may use a copy with Defocus Allow.

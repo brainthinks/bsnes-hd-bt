@@ -1,3 +1,29 @@
+bsnes-hd-bt
+===========
+
+A fork of official [bsnes](https://github.com/bsnes-emu/bsnes) with an optional
+HD PPU: 24-bit color and GPU Mode 7 supersampling. Accurate and Fast stay
+hardware-accurate and remain the default. HD is opt-in.
+
+The aim is to meet or exceed [DerKoun bsnes-hd](https://github.com/DerKoun/bsnes-hd)
+without changing the accurate path. Detailed remaining work is in
+[TODO.md](TODO.md).
+
+Goals and priorities
+--------------------
+
+- [x] Max resolution for Mode 7 graphics
+  - [x] Offload to GPU
+  - [x] Crisp, raw pixels, no blurring
+  - [x] Configurable supersampling
+- [ ] Improved Linux performance
+- [ ] Improved support for modern controls (likely SDL3)
+- [ ] Meet or exceed parity with all desirable [bsnes-hd](https://github.com/DerKoun/bsnes-hd) features
+  - [x] 24-bit color
+  - [ ] Widescreen support
+
+---
+
 bsnes
 =====
 
