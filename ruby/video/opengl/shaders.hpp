@@ -309,14 +309,11 @@ static string OpenGLMode7FragmentShader = R"(
     float snesH = sourceSize.y / scale;
     vec2 snes = vec2(texCoord.x * 256.0, lineOrigin + texCoord.y * snesH);
     vec2 pixel = vec2(256.0, snesH) / max(targetSize.xy, vec2(1.0));
-    // Maximize shrinks a window pixel in SNES space, so far SMK grass turns
-    // into a checker. Keep at least the ~4.5× windowed footprint. This is
-    // not a 1-SNES-pixel blur (that smeared F-Zero).
-    vec2 kernel = max(pixel, vec2(256.0 / 1280.0, snesH / 960.0));
-    // Taper only a minified axis. Magnified texels retain the existing
-    // box SS footprint; applying bilinear filtering there softened the
-    // track markers. Measure vertical projection over a whole scanline
-    // so the derivative includes HDMA, and do not bridge line groups.
+    // Filter support is exactly one output pixel. Expanding it (gaussian,
+    // 3× taper, 1-SNES kernel) mixed neighboring pixels and looked blurry.
+    // Far banding is handled by integrating the texels that already sit
+    // inside this pixel, not by sampling outside it.
+    vec2 kernel = pixel;
     vec2 centerUV, rightUV, belowUV;
     int centerRepeat, centerLine, otherRepeat, otherLine;
     vec2 minification = vec2(0.0);
@@ -335,29 +332,21 @@ static string OpenGLMode7FragmentShader = R"(
         minification.y = (crossed.x + crossed.y) * pixel.y;
       }
     }
-    // Count crossings on both texture axes: a rotated checker reaches
-    // the sampling limit sooner than the Euclidean vector length suggests.
-    vec2 taper = smoothstep(vec2(0.5), vec2(1.0), minification);
     int n = ss < 1 ? 1 : ss;
     if(n > 16) n = 16;
-    // Integrate the more compressed screen axis. The other axis still
-    // uses point samples and needs two taps per projected texel.
-    vec2 footprint = minification * kernel / pixel;
-    vec2 budgetTaper = clamp((float(n) / (2.0 * max(footprint, vec2(1.0e-6))) - 1.0) * 0.5, 0.0, 1.0);
-    bool integrateY = footprint.y >= footprint.x;
-    if(integrateY) taper.x = min(taper.x, budgetTaper.x);
-    else taper.y = min(taper.y, budgetTaper.y);
-    if(n == 1) taper = vec2(0.0);
-    bool integrateAxis = (integrateY ? taper.y : taper.x) > 0.0;
-    vec2 interval = kernel * (1.0 + 2.0 * taper) / float(n);
+    bool integrateY = minification.y >= minification.x;
+    float compressed = integrateY ? minification.y : minification.x;
+    // One or more texels per output pixel: average those texels. Below
+    // that, nearest SS keeps the raw checker. ss==1 stays a point sample
+    // so an unused `ss` uniform cannot silently match 8×.
+    bool integrateAxis = n > 1 && compressed >= 1.0;
+    vec2 interval = kernel / float(n);
     interval *= integrateY ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
     vec4 acc = vec4(0.0);
     float hits = 0.0;
     for(int j = 0; j < n; j++) {
       for(int i = 0; i < n; i++) {
         vec2 o = (vec2(float(i), float(j)) + 0.5) / float(n) - 0.5;
-        o *= 1.0 + 2.0 * taper;
-        float weight = exp(-2.0 * dot(o * o, taper));
         vec2 s = snes + o * kernel;
         vec2 uv;
         int repeatMode;
@@ -367,8 +356,8 @@ static string OpenGLMode7FragmentShader = R"(
           ? integrateM7(s, interval)
           : shadeM7(sampleMap(uv, repeatMode, vec2(0.0), vec2(0.0)), s, y);
         if(c.a > 0.01) {
-          acc += c * weight;
-          hits += c.a * weight;
+          acc += c;
+          hits += 1.0;
         }
       }
     }

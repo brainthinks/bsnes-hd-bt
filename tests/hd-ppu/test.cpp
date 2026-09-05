@@ -287,6 +287,9 @@ static auto testShaderSource(const std::string& path) -> void {
   CHECK(frag.find("return decodeVram") != std::string::npos);
   CHECK(frag.find("vec4(c.rgb, 1.0)") != std::string::npos);
   CHECK(frag.find("for(int j = 0; j < n; j++)") != std::string::npos);
+  CHECK(frag.find("integrateM7") != std::string::npos);
+  CHECK(frag.find("exp(-2.0") == std::string::npos);
+  CHECK(frag.find("1.0 + 2.0 * taper") == std::string::npos);
   CHECK(frag.find("j < 16") == std::string::npos);
   CHECK(frag.find("int n = ss") != std::string::npos);
   CHECK(frag.find("luma < 1.0 / 15.0") != std::string::npos);
