@@ -1,4 +1,7 @@
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
@@ -35,7 +38,7 @@ struct InputSDL : InputDriver {
   }
 
   auto rumble(uint64_t id, bool enable) -> bool override {
-    return false;
+    return joypad.rumble(id, enable);
   }
 
 private:

@@ -25,7 +25,11 @@ ifeq ($(ruby),)
     $(eval $(call pkg_check,libpulse,audio.pulseaudiosimple))
     $(eval $(call pkg_check,ao,audio.ao))
     ruby += input.xlib
-    $(eval $(call pkg_check,sdl2,input.sdl))
+    ifneq ($(shell PKG_CONFIG_PATH="$(nall.path)/../deps/sdl3-prefix/lib/pkgconfig:$(nall.path)/../deps/sdl3-prefix/lib64/pkgconfig:$$PKG_CONFIG_PATH" pkg-config --exists sdl3 && echo yes),)
+      ruby += input.sdl
+    else
+      $(eval $(call pkg_check,sdl3,input.sdl))
+    endif
     $(eval $(call pkg_check,udev,input.udev))
   else ifeq ($(platform),bsd)
     ruby += video.glx video.glx2 video.xvideo video.xshm
@@ -34,7 +38,7 @@ ifeq ($(ruby),)
     $(eval $(call pkg_check,libpulse,audio.pulseaudio))
     $(eval $(call pkg_check,libpulse,audio.pulseaudiosimple))
     ruby += input.xlib
-    $(eval $(call pkg_check,sdl2,input.sdl))
+    $(eval $(call pkg_check,sdl3,input.sdl))
   endif
 endif
 
@@ -45,7 +49,8 @@ else
 endif
 
 ruby.flags += $(foreach c,$(subst .,_,$(call strupper,$(ruby))),-D$c)
-ruby.flags += $(if $(findstring input.sdl,$(ruby)),$(shell sdl2-config --cflags))
+sdl3.pkgconfig = PKG_CONFIG_PATH="$(nall.path)/../deps/sdl3-prefix/lib/pkgconfig:$(nall.path)/../deps/sdl3-prefix/lib64/pkgconfig:$$PKG_CONFIG_PATH" pkg-config
+ruby.flags += $(if $(findstring input.sdl,$(ruby)),$(shell $(sdl3.pkgconfig) --cflags sdl3))
 
 ruby.options :=
 
@@ -65,7 +70,7 @@ ruby.options += $(if $(findstring audio.wasapi,$(ruby)),-lavrt -luuid)
 ruby.options += $(if $(findstring audio.waveout,$(ruby)),-lwinmm)
 ruby.options += $(if $(findstring audio.xaudio2,$(ruby)),-lole32)
 
-ruby.options += $(if $(findstring input.sdl,$(ruby)),$(shell sdl2-config --libs))
+ruby.options += $(if $(findstring input.sdl,$(ruby)),$(shell $(sdl3.pkgconfig) --libs sdl3))
 ruby.options += $(if $(findstring input.udev,$(ruby)),-ludev)
 ruby.options += $(if $(findstring input.windows,$(ruby)),-ldinput8 -ldxguid)
 

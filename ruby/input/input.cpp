@@ -113,12 +113,12 @@ auto Input::hasDrivers() -> vector<string> {
   "Carbon",
   #endif
 
-  #if defined(INPUT_UDEV)
-  "udev",
-  #endif
-
   #if defined(INPUT_SDL)
   "SDL",
+  #endif
+
+  #if defined(INPUT_UDEV)
+  "udev",
   #endif
 
   #if defined(INPUT_XLIB)
@@ -135,10 +135,10 @@ auto Input::optimalDriver() -> string {
   return "Quartz";
   #elif defined(INPUT_CARBON)
   return "Carbon";
-  #elif defined(INPUT_UDEV)
-  return "udev";
   #elif defined(INPUT_SDL)
   return "SDL";
+  #elif defined(INPUT_UDEV)
+  return "udev";
   #elif defined(INPUT_XLIB)
   return "Xlib";
   #else
@@ -153,10 +153,10 @@ auto Input::safestDriver() -> string {
   return "Quartz";
   #elif defined(INPUT_CARBON)
   return "Carbon";
-  #elif defined(INPUT_UDEV)
-  return "udev";
   #elif defined(INPUT_SDL)
   return "SDL";
+  #elif defined(INPUT_UDEV)
+  return "udev";
   #elif defined(INPUT_XLIB)
   return "Xlib";
   #else

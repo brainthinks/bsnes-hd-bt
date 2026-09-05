@@ -60,6 +60,12 @@ and running:
 
     make -C bsnes
 
+Linux gamepad hotplug uses SDL3. Mint 22 / Ubuntu 24.04 do not ship it, so
+build a local copy once:
+
+    ./deps/build-sdl3.sh
+    make -C bsnes
+
 Additional configuration options can be provided,
 see [Build Configuration](../reference/build-config.md) for details.
 

@@ -75,6 +75,7 @@ struct InputManager {
 
   auto initialize() -> void;
   auto bind() -> void;
+  auto applyGamepadDefaults() -> void;
   auto poll() -> void;
   auto frame() -> void;
   auto onChange(shared_pointer<HID::Device> device, uint group, uint input, int16_t oldValue, int16_t newValue) -> void;

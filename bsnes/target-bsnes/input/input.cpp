@@ -263,6 +263,8 @@ auto InputManager::initialize() -> void {
 }
 
 auto InputManager::bind() -> void {
+  applyGamepadDefaults();
+
   for(auto& port : ports) {
     for(auto& device : port.devices) {
       for(auto& mapping : device.mappings) {
@@ -274,6 +276,72 @@ auto InputManager::bind() -> void {
   for(auto& hotkey : hotkeys) {
     hotkey.bind();
   }
+}
+
+// SDL3 virtual pad uses product 0x5343 so old SDL2 raw-joystick ids (0x3)
+// cannot drive face buttons or hotkeys. Defaults are SNES-positional:
+// South=B, East=A, West=Y, North=X. Hotkeys are never auto-bound.
+auto InputManager::applyGamepadDefaults() -> void {
+  static constexpr uint16_t CanonicalProductID = 0x5343;
+  static constexpr uint16_t LegacySdl2ProductID = 0x0003;
+
+  auto product = [](const string& assignment) -> uint16_t {
+    auto token = assignment.split("/");
+    if(token.size() < 3) return 0;
+    return (uint16_t)(token[0].natural() & 0xffff);
+  };
+
+  auto stripLegacy = [&](InputMapping& mapping) {
+    for(auto& assignment : mapping.assignments) {
+      if(product(assignment) == LegacySdl2ProductID) assignment = {};
+    }
+  };
+
+  auto appendDefault = [&](InputMapping& mapping, const string& joypad) {
+    for(auto& assignment : mapping.assignments) {
+      if(product(assignment) == CanonicalProductID) return;
+    }
+    for(auto& assignment : mapping.assignments) {
+      if(!assignment) {
+        assignment = joypad;
+        return;
+      }
+    }
+  };
+
+  static const struct { const char* name; const char* slot0; } defaults[] = {
+    {"Up",     "0x5343/1/1/Lo"},
+    {"Down",   "0x5343/1/1/Hi"},
+    {"Left",   "0x5343/1/0/Lo"},
+    {"Right",  "0x5343/1/0/Hi"},
+    {"B",      "0x5343/3/0"},
+    {"A",      "0x5343/3/1"},
+    {"Y",      "0x5343/3/2"},
+    {"X",      "0x5343/3/3"},
+    {"Select", "0x5343/3/4"},
+    {"Start",  "0x5343/3/6"},
+    {"L",      "0x5343/3/9"},
+    {"R",      "0x5343/3/10"},
+  };
+
+  for(auto& port : ports) {
+    if(!port.name.beginsWith("Controller Port")) continue;
+    bool port2 = (bool)port.name.find("2");
+    for(auto& device : port.devices) {
+      if(device.name != "Gamepad") continue;
+      for(auto& mapping : device.mappings) {
+        stripLegacy(mapping);
+        for(auto& entry : defaults) {
+          if(mapping.name != entry.name) continue;
+          string assignment = entry.slot0;
+          if(port2) assignment = assignment.replace("0x5343/", "0x100005343/");
+          appendDefault(mapping, assignment);
+        }
+      }
+    }
+  }
+
+  for(auto& hotkey : hotkeys) stripLegacy(hotkey);
 }
 
 auto InputManager::poll() -> void {

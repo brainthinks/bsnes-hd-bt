@@ -16,7 +16,7 @@ Goals and priorities
   - [x] Offload to GPU
   - [x] Crisp, raw pixels, no blurring
   - [x] Configurable supersampling
-- [ ] Improved Linux performance
+- [x] Improved Linux performance
 - [ ] Improved support for modern controls (likely SDL3)
 - [ ] Meet or exceed parity with all desirable [bsnes-hd](https://github.com/DerKoun/bsnes-hd) features
   - [x] 24-bit color

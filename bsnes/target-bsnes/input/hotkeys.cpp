@@ -129,35 +129,66 @@ auto InputManager::bindHotkeys() -> void {
     program.frameAdvanceLock = false;
   }));
 
-  hotkeys.append(InputHotkey("Decrease HD Mode 7").onPress([] {
-    int index = enhancementSettings.mode7Scale.selected().offset() - 1;
-    if(index < 0) return;
+  auto cycleFastScale = [](int delta) {
+    if(settings.emulator.hack.ppu.hd || !settings.emulator.hack.ppu.fast) return;
+    int index = enhancementSettings.mode7Scale.selected().offset() + delta;
+    if(index < 0 || index >= enhancementSettings.mode7Scale.itemCount()) return;
     enhancementSettings.mode7Scale.item(index).setSelected();
     enhancementSettings.mode7Scale.doChange();
+  };
+
+  hotkeys.append(InputHotkey("Fast PPU Decrease HD Mode 7").onPress([=] {
+    cycleFastScale(-1);
   }));
 
-  hotkeys.append(InputHotkey("Increase HD Mode 7").onPress([] {
-    int index = enhancementSettings.mode7Scale.selected().offset() + 1;
-    if(index >= enhancementSettings.mode7Scale.itemCount()) return;
+  hotkeys.append(InputHotkey("Fast PPU Increase HD Mode 7").onPress([=] {
+    cycleFastScale(+1);
+  }));
+
+  hotkeys.append(InputHotkey("Fast PPU Toggle Supersampling").onPress([] {
+    if(settings.emulator.hack.ppu.hd || !settings.emulator.hack.ppu.fast) return;
+    enhancementSettings.mode7Supersample.setChecked(!enhancementSettings.mode7Supersample.checked()).doToggle();
+  }));
+
+  auto cycleHdScale = [](int delta) {
+    if(!settings.emulator.hack.ppu.hd) return;
+    int index = enhancementSettings.mode7Scale.selected().offset() + delta;
+    if(index < 0 || index >= enhancementSettings.mode7Scale.itemCount()) return;
     enhancementSettings.mode7Scale.item(index).setSelected();
     enhancementSettings.mode7Scale.doChange();
-  }));
-
-  hotkeys.append(InputHotkey("Toggle Supersampling").onPress([] {
-    if(settings.emulator.hack.ppu.hd) {
-      auto& m7 = settings.emulator.hack.ppu.hdMode7;
-      m7.ssFactor = m7.ssFactor > 1 ? 1 : 2;
-      m7.supersample = m7.ssFactor > 1;
-      emulator->configure("Hacks/PPU/HDMode7/SsFactor", m7.ssFactor);
-      emulator->configure("Hacks/PPU/HDMode7/Supersample", m7.supersample);
-      for(uint n : range(enhancementSettings.mode7SsFactor.itemCount())) {
-        if(enhancementSettings.mode7SsFactor.item(n).attribute("factor").natural() == m7.ssFactor) {
-          enhancementSettings.mode7SsFactor.item(n).setSelected();
-        }
-      }
-    } else {
-      enhancementSettings.mode7Supersample.setChecked(!enhancementSettings.mode7Supersample.checked()).doToggle();
+    if(auto item = enhancementSettings.mode7Scale.selected()) {
+      program.showMessage({"HD PPU scale: ", item.text()});
     }
+  };
+
+  hotkeys.append(InputHotkey("HD PPU Decrease Scale").onPress([=] {
+    cycleHdScale(-1);
+  }));
+
+  hotkeys.append(InputHotkey("HD PPU Increase Scale").onPress([=] {
+    cycleHdScale(+1);
+  }));
+
+  hotkeys.append(InputHotkey("HD PPU Toggle Supersampling").onPress([] {
+    if(!settings.emulator.hack.ppu.hd) return;
+    auto& m7 = settings.emulator.hack.ppu.hdMode7;
+    static uint lastFactor = 0;
+    if(m7.ssFactor > 1) {
+      lastFactor = m7.ssFactor;
+      m7.ssFactor = 1;
+    } else {
+      m7.ssFactor = lastFactor > 1 ? lastFactor : 2;
+    }
+    m7.supersample = m7.ssFactor > 1;
+    emulator->configure("Hacks/PPU/HDMode7/SsFactor", m7.ssFactor);
+    emulator->configure("Hacks/PPU/HDMode7/Supersample", m7.supersample);
+    for(uint n : range(enhancementSettings.mode7SsFactor.itemCount())) {
+      if(enhancementSettings.mode7SsFactor.item(n).attribute("factor").natural() == m7.ssFactor) {
+        enhancementSettings.mode7SsFactor.item(n).setSelected();
+      }
+    }
+    if(m7.ssFactor == 1) program.showMessage("HD PPU supersampling off");
+    else program.showMessage({"HD PPU supersampling ", m7.ssFactor, "×"});
   }));
 
   hotkeys.append(InputHotkey("Reset Emulation").onPress([] {

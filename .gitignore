@@ -1,2 +1,5 @@
 hiro/qt/qt.moc
 tests/hd-ppu/out/
+deps/sdl3-src/
+deps/sdl3-build/
+deps/sdl3-prefix/
