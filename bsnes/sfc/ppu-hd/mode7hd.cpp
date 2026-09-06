@@ -1,3 +1,4 @@
+#include <emulator/hdtrace.hpp>
 //determine mode 7 line groups for perspective correction
 auto PPU::Line::cacheMode7HD() -> void {
   ppu.mode7LineGroups.count = 0;
@@ -146,7 +147,9 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
   renderWindow(self.window, self.window.aboveEnable, windowAbove);
   renderWindow(self.window, self.window.belowEnable, windowBelow);
 
-  if(ppu.gpuSupersample() && this->y < 240 && !extbg) {
+  //the GPU sampler still reads the hardware's 128x128 map, so an extended map
+  //keeps the CPU picture until the shader learns the larger one
+  if(ppu.gpuSupersample() && this->y < 240 && !extbg && !ppu.mode7ExtMap.loaded()) {
     ppu.gpuMode7.active = true;
     ppu.gpuMode7.ss = ppu.gpuSsFactor();
     float* p = ppu.gpuMode7.lines + this->y * 24;
@@ -207,8 +210,12 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
 
         bool skip = false;
         if(pixelX != pixelXp || pixelY != pixelYp) {
-          uint tile    = io.mode7.repeat == 3 && ((pixelX | pixelY) & ~1023) ? 0 : (ppu.vram[(pixelY >> 3 & 127) * 128 + (pixelX >> 3 & 127)] & 0xff);
-          uint palette = io.mode7.repeat == 2 && ((pixelX | pixelY) & ~1023) ? 0 : (ppu.vram[(((pixelY & 7) << 3) + (pixelX & 7)) + (tile << 6)] >> 8);
+          unsigned extended = 0;
+          bool fromExtended = ppu.mode7ExtMap.lookup(pixelX, pixelY, extended);
+          bool outside = ((pixelX | pixelY) & ~1023) != 0;
+          uint tile    = fromExtended ? extended
+                       : io.mode7.repeat == 3 && outside ? 0 : (ppu.vram[(pixelY >> 3 & 127) * 128 + (pixelX >> 3 & 127)] & 0xff);
+          uint palette = !fromExtended && io.mode7.repeat == 2 && outside ? 0 : (ppu.vram[(((pixelY & 7) << 3) + (pixelX & 7)) + (tile << 6)] >> 8);
 
           uint8 priority;
           if(!extbg) {
@@ -225,6 +232,9 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
               color = decode(directColor(0, palette));
             } else {
               color = decode(cgram[palette]);
+            }
+            if(fromExtended && HdTrace::extendedMapMark()) {
+              color = (color & 0xff00ff00) | 0x00ff0000;  //tint what the extended map supplied
             }
             pixel = {source, priority, color};
             pixelXp = pixelX;

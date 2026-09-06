@@ -90,6 +90,7 @@ auto PPU::Line::flush() -> void {
     }
     if(ppu.hdScale() > 1) cacheMode7HD();
     cacheBackgroundPanoramas();
+    cacheMode7ExtendedMap();
     #pragma omp parallel for if(Line::count >= 8)
     for(uint y = 0; y < Line::count; y++) {
       if(ppu.deinterlace()) {

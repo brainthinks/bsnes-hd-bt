@@ -1,4 +1,5 @@
 #include <emulator/hdtoolkit.hpp>
+#include <emulator/m7extmap.hpp>
 //performance-focused, scanline-based, parallelized implementation of PPU
 
 //limitations:
@@ -313,6 +314,7 @@ public:
 
     //background.cpp
     static auto cacheBackgroundPanoramas() -> void;
+    static auto cacheMode7ExtendedMap() -> void;
     //derived rendering data, never serialized
     HdToolkit::PanoramaGrid panorama[4] = {};
     uint panoramaFirstRow[4] = {};
@@ -370,6 +372,8 @@ public:
 
   //used to help detect when the video output size changes between frames to clear overscan area.
   uint wsExt = 0;
+  //derived rendering data, never serialized
+  HdToolkit::Mode7ExtendedMap mode7ExtMap;
 
   struct Frame {
     uint pitch = 0;

@@ -9,6 +9,7 @@
 
 #include "gpu-mode7.hpp"
 #include "emulator/hdtoolkit.hpp"
+#include "emulator/m7extmap.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -429,6 +430,93 @@ static auto testPacking() -> void {
   // A band straddling the tilemap's vertical wrap is rejected.
   CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 30, 3).count == 0);
 
+}
+
+static auto testMode7ExtendedMap() -> void {
+  // A file the loader should accept: 256x256 tiles, hardware window at 64,64.
+  std::string path = "/tmp/hd-ppu-test-extmap.m7x";
+  const unsigned tiles = 256, origin = 64;
+  {
+    auto file = fopen(path.c_str(), "wb");
+    CHECK(file != nullptr);
+    if(!file) return;
+    auto put16 = [&](unsigned v) { fputc(v & 0xff, file); fputc(v >> 8 & 0xff, file); };
+    fwrite("M7XM", 1, 4, file);
+    put16(1); put16(tiles); put16(tiles); put16(origin); put16(origin);
+    for(unsigned y = 0; y < tiles; y++) {
+      for(unsigned x = 0; x < tiles; x++) {
+        //author a border ring only: the hardware window stays unauthored
+        bool ring = x < origin || x >= origin + 128 || y < origin || y >= origin + 128;
+        put16(ring ? 77 : HdToolkit::Mode7ExtendedMap::Unmapped);
+      }
+    }
+    fclose(file);
+  }
+
+  HdToolkit::Mode7ExtendedMap map;
+  CHECK(map.load(path.c_str()));
+  CHECK(map.width() == tiles);
+  CHECK(map.height() == tiles);
+
+  unsigned tile = 0;
+  // Inside the hardware's own 1024x1024 window VRAM always wins, even where the
+  // map is authored, so a stale file can never corrupt the live picture.
+  CHECK(!map.lookup(0, 0, tile));
+  CHECK(!map.lookup(1023, 1023, tile));
+  // Just outside it, the authored ring answers.
+  CHECK(map.lookup(-8, 500, tile));
+  CHECK(tile == 77);
+  CHECK(map.lookup(1024, 500, tile));
+  CHECK(tile == 77);
+  CHECK(map.lookup(500, -1, tile));
+  CHECK(tile == 77);
+  // Past the extended map's own edge it defers rather than wrapping, so the
+  // hardware's behaviour still stands out there.
+  CHECK(!map.lookup(-513, 500, tile));
+  CHECK(!map.lookup(1536, 500, tile));
+
+  // A map whose ring is unauthored changes nothing anywhere.
+  {
+    auto file = fopen(path.c_str(), "wb");
+    if(file) {
+      auto put16 = [&](unsigned v) { fputc(v & 0xff, file); fputc(v >> 8 & 0xff, file); };
+      fwrite("M7XM", 1, 4, file);
+      put16(1); put16(tiles); put16(tiles); put16(origin); put16(origin);
+      for(unsigned n = 0; n < tiles * tiles; n++) put16(HdToolkit::Mode7ExtendedMap::Unmapped);
+      fclose(file);
+    }
+  }
+  HdToolkit::Mode7ExtendedMap blank;
+  CHECK(blank.load(path.c_str()));
+  CHECK(!blank.lookup(-8, 500, tile));
+  CHECK(!blank.lookup(2000, 2000, tile));
+
+  // Rejected: wrong magic, unsupported size, missing file.
+  {
+    auto file = fopen(path.c_str(), "wb");
+    if(file) { fwrite("XXXX", 1, 4, file); fclose(file); }
+  }
+  HdToolkit::Mode7ExtendedMap bad;
+  CHECK(!bad.load(path.c_str()));
+  CHECK(!bad.loaded());
+  CHECK(!bad.lookup(-8, 500, tile));
+  CHECK(!HdToolkit::Mode7ExtendedMap().load("/tmp/hd-ppu-test-extmap-missing.m7x"));
+  remove(path.c_str());
+
+  // A round trip through the dump: the hardware map lands in the middle and
+  // everything around it is left unauthored, so it renders as it does today.
+  {
+    static unsigned short vram[32768] = {};
+    for(unsigned n = 0; n < 16384; n++) vram[n] = 0x1200 | (n & 0xff);
+    std::string dumped = "/tmp/hd-ppu-test-extmap-dump.m7x";
+    CHECK(HdToolkit::Mode7ExtendedMap::dumpFromVram(dumped.c_str(), vram, 2));
+    HdToolkit::Mode7ExtendedMap back;
+    CHECK(back.load(dumped.c_str()));
+    CHECK(back.width() == 256);
+    CHECK(!back.lookup(64, 64, tile));    //inside the window: VRAM wins
+    CHECK(!back.lookup(-8, 64, tile));    //outside it: nothing was authored
+    remove(dumped.c_str());
+  }
 }
 
 static auto testShaderSource(const std::string& path) -> void {
@@ -873,6 +961,7 @@ auto main(int argc, char** argv) -> int {
   const char* shaderPath = argc > 1 ? argv[1] : "../../ruby/video/opengl/shaders.hpp";
   testPacking();
   testColorRamps();
+  testMode7ExtendedMap();
   testShaderSource(shaderPath);
   testViewportSource();
 #ifdef HD_PPU_GL

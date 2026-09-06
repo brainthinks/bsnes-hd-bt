@@ -41,8 +41,14 @@ auto PPU::Line::renderMode7(PPU::IO::Background& self, uint8 source) -> void {
     bool outOfBounds = (pixelX | pixelY) & ~1023;
     uint15 tileAddress = tileY * 128 + tileX;
     uint15 paletteAddress = ((pixelY & 7) << 3) + (pixelX & 7);
-    uint8 tile = io.mode7.repeat == 3 && outOfBounds ? 0 : ppu.vram[tileAddress] >> 0;
-    uint8 palette = io.mode7.repeat == 2 && outOfBounds ? 0 : ppu.vram[tile << 6 | paletteAddress] >> 8;
+    //the extended map answers first where it has been authored; everywhere else
+    //the hardware's own wrapping stands
+    unsigned extended = 0;
+    bool fromExtended = ppu.mode7ExtMap.lookup(pixelX, pixelY, extended);
+    uint8 tile = fromExtended ? (uint8)extended
+               : io.mode7.repeat == 3 && outOfBounds ? 0 : ppu.vram[tileAddress] >> 0;
+    uint8 palette = !fromExtended && io.mode7.repeat == 2 && outOfBounds ? 0
+                  : ppu.vram[tile << 6 | paletteAddress] >> 8;
 
     uint8 priority;
     if(source == Source::BG1) {

@@ -65,6 +65,32 @@ auto PPU::Line::cacheBackgroundPanoramas() -> void {
   }
 }
 
+//Debug loader for the extended Mode 7 map. A ROM hack would stream the map and
+//its window origin through a side channel; until that exists, load one from a
+//file so the rendering can be seen. Dumping writes the hardware's current map
+//into the middle of a larger one, which reads back identical to today because
+//everything around it is left unauthored.
+auto PPU::Line::cacheMode7ExtendedMap() -> void {
+  static bool once = false;
+  if(once) return;
+  once = true;
+  if(auto spec = HdTrace::extendedMapDump()) {
+    char path[512];
+    unsigned factor = 2;
+    if(auto comma = strchr(spec, ',')) {
+      unsigned length = (unsigned)(comma - spec);
+      if(length >= sizeof(path)) length = sizeof(path) - 1;
+      memcpy(path, spec, length);
+      path[length] = 0;
+      factor = (unsigned)atoi(comma + 1);
+    } else {
+      snprintf(path, sizeof(path), "%s", spec);
+    }
+    HdToolkit::Mode7ExtendedMap::dumpFromVram(path, ppu.vram, factor ? factor : 2);
+  }
+  if(auto path = HdTrace::extendedMapPath()) ppu.mode7ExtMap.load(path);
+}
+
 auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> void {
   if(!self.aboveEnable && !self.belowEnable) return;
   if(self.tileMode == TileMode::Mode7) return renderMode7(self, source);
