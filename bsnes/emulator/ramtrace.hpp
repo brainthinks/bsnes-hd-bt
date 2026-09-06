@@ -190,6 +190,89 @@ private:
   int state = -1;
 };
 
+// Which bytes of the cartridge are code, and what operand widths they ran with.
+//
+// A 65816 cannot be disassembled reliably from the ROM alone. Operand width is
+// not in the encoding — the same three bytes are one instruction with a 16-bit
+// accumulator and two with an 8-bit one — and code sits interleaved with
+// compressed data that disassembles into convincing nonsense. A static sweep
+// produces something that looks right and is silently wrong.
+//
+// Execution settles both questions. Every instruction that runs is code, and
+// the flags at the time are the widths it ran with. One playthrough turns
+// guesswork into an exact map, and the disassembler can then decode only real
+// code, correctly.
+struct Coverage {
+  static constexpr unsigned Executed = 1, M8 = 2, M16 = 4, X8 = 8, X16 = 16, Read = 32;
+
+  auto enabled() -> bool {
+    if(state < 0) {
+      state = 0;
+      if(auto path = getenv("BSNES_TRACE_EXEC")) {
+        map = (uint8_t*)calloc(Space, 1);
+        if(map) { state = 1; target = path; atexit(writeAtExit); }
+      }
+    }
+    return state == 1;
+  }
+
+  auto note(unsigned pc, bool m8, bool x8) -> void {
+    auto& flags = map[pc & (Space - 1)];
+    flags |= Executed | (m8 ? M8 : M16) | (x8 ? X8 : X16);
+  }
+
+  // Every byte the cartridge is read for, instruction fetches included. What is
+  // read but is not part of any decoded instruction is the game's data, which
+  // is what an extractor has to pull out; separating the two is left to the
+  // reader, which knows how long each instruction turned out to be.
+  auto noteRead(unsigned address) -> void {
+    unsigned bank = address >> 16 & 0xff;
+    bool cartridge = (bank < 0x40 || (bank >= 0x80 && bank < 0xc0)) && (address & 0xffff) >= 0x8000;
+    if(cartridge || bank >= 0xc0) map[address & (Space - 1)] |= Read;
+  }
+
+  auto write() -> void {
+    if(state != 1 || !map) return;
+    auto file = fopen(target, "wb");
+    if(!file) return;
+    unsigned count = 0;
+    for(unsigned n = 0; n < Space; n++) count += map[n] != 0;
+
+    uint8_t header[10] = {'F', 'Z', 'C', 'V'};
+    header[4] = 1; header[5] = 0;
+    header[6] = count & 0xff; header[7] = count >> 8 & 0xff;
+    header[8] = count >> 16 & 0xff; header[9] = count >> 24 & 0xff;
+    fwrite(header, 1, sizeof(header), file);
+    for(unsigned n = 0; n < Space; n++) {
+      if(!map[n]) continue;
+      uint8_t record[5] = {(uint8_t)(n & 0xff), (uint8_t)(n >> 8 & 0xff),
+                           (uint8_t)(n >> 16 & 0xff), 0, map[n]};
+      fwrite(record, 1, sizeof(record), file);
+    }
+    fclose(file);
+    fprintf(stderr, "[coverage] %u executed addresses written to %s\n", count, target);
+  }
+
+private:
+  static constexpr unsigned Space = 1u << 24;   //the whole 24-bit address space
+  static auto writeAtExit() -> void;
+
+  uint8_t* map = nullptr;
+  const char* target = nullptr;
+  int state = -1;
+};
+
+inline auto coverage() -> Coverage& {
+  static Coverage instance;
+  return instance;
+}
+
+inline auto Coverage::writeAtExit() -> void { coverage().write(); }
+
+inline auto tracingExec() -> bool { return coverage().enabled(); }
+inline auto noteExec(unsigned pc, bool m8, bool x8) -> void { coverage().note(pc, m8, x8); }
+inline auto noteRead(unsigned address) -> void { coverage().noteRead(address); }
+
 inline auto watch() -> WriteWatch& {
   static WriteWatch instance;
   return instance;

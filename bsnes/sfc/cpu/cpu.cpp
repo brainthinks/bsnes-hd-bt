@@ -1,3 +1,4 @@
+#include <emulator/ramtrace.hpp>
 #include <sfc/sfc.hpp>
 
 namespace SuperFamicom {
@@ -34,6 +35,9 @@ auto CPU::Enter() -> void {
 auto CPU::main() -> void {
   if(r.wai) return instructionWait();
   if(r.stp) return instructionStop();
+  //BSNES_TRACE_EXEC: here the PC is an instruction start and the flags are the
+  //widths it runs with, which is exactly what a disassembler cannot infer
+  if(RamTrace::tracingExec()) RamTrace::noteExec(r.pc.d, r.p.m, r.p.x);
   if(!status.interruptPending) return instruction();
 
   if(status.nmiPending) {
