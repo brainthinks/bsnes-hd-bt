@@ -34,10 +34,6 @@ auto PPU::writeVRAM(uint8 data) -> void {
   auto address = vramAddress();
   if constexpr(Byte == 0) {
     vram[address] = vram[address] & 0xff00 | data << 0;
-    //Mode 7 tilemap entries live in the low bytes of $0000-$3fff. Remember each
-    //one against the world coordinate it is being written for, so the streamed
-    //course outlives the 128x128 window it passes through.
-    if(address < 0x4000) recordMode7WorldTile(address, data);
   }
   if constexpr(Byte == 1) {
     vram[address] = vram[address] & 0x00ff | data << 8;

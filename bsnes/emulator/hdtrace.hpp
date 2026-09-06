@@ -89,27 +89,6 @@ namespace HdTrace {
     return on == 1;
   }
 
-  //BSNES_M7_EXTMAP=<file>   render Mode 7 through an extended map
-  //BSNES_M7_EXTMAP_DUMP=<file>[,factor]  write a starter file from the current
-  //                                      hardware map (factor 2 or 4)
-  //BSNES_M7_EXTMAP_MARK=1   tint pixels that came from the extended map
-  inline auto extendedMapPath() -> const char* { return getenv("BSNES_M7_EXTMAP"); }
-  inline auto extendedMapDump() -> const char* { return getenv("BSNES_M7_EXTMAP_DUMP"); }
-  inline auto extendedMapMark() -> bool {
-    static int on = -1;
-    if(on < 0) on = getenv("BSNES_M7_EXTMAP_MARK") ? 1 : 0;
-    return on == 1;
-  }
-
-  //BSNES_M7_WORLD="7e00a8-2688,7e00aa-3504": where a game keeps the player's
-  //world position, so streamed Mode 7 tiles can be remembered against it.
-  inline auto worldOriginDescriptor() -> const char* { return getenv("BSNES_M7_WORLD"); }
-  inline auto worldCacheLog2() -> unsigned {
-    auto text = getenv("BSNES_M7_WORLD_BITS");
-    unsigned bits = text ? (unsigned)atoi(text) : 20;
-    return bits ? bits : 20;
-  }
-
   inline auto timing() -> bool {
     static int on = -1;
     if(on < 0) on = getenv("BSNES_TIME_FRAME") ? 1 : 0;

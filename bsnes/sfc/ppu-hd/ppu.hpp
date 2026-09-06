@@ -1,6 +1,4 @@
 #include <emulator/hdtoolkit.hpp>
-#include <emulator/m7extmap.hpp>
-#include <emulator/m7worldcache.hpp>
 //performance-focused, scanline-based, parallelized implementation of PPU
 
 //limitations:
@@ -315,7 +313,6 @@ public:
 
     //background.cpp
     static auto cacheBackgroundPanoramas() -> void;
-    static auto cacheMode7ExtendedMap() -> void;
     //derived rendering data, never serialized
     HdToolkit::PanoramaGrid panorama[4] = {};
     uint panoramaFirstRow[4] = {};
@@ -373,21 +370,6 @@ public:
 
   //used to help detect when the video output size changes between frames to clear overscan area.
   uint wsExt = 0;
-  //derived rendering data, never serialized
-  HdToolkit::Mode7ExtendedMap mode7ExtMap;
-  HdToolkit::Mode7WorldCache mode7World;
-  HdToolkit::Mode7WorldOrigin mode7WorldOrigin;
-  int mode7WorldOriginX = 0, mode7WorldOriginY = 0;  //map coordinate + this == world
-  mutable uint64 mode7WorldHits = 0, mode7WorldMisses = 0;
-  auto cacheMode7WorldOrigin() -> void;
-  auto recordMode7WorldTile(uint address, uint8 tile) -> void;
-  static auto nearestMapMultiple(int origin, int mapTile) -> int {
-    //whole maps of 128 tiles, chosen so the slot lands nearest the player
-    int away = origin + mapTile * 8;
-    int maps = (away >= 0 ? away + 512 : away - 512) / 1024;
-    return maps * 128;
-  }
-  auto mode7WorldLookup(int pixelX, int pixelY, unsigned& tile) const -> bool;
 
   struct Frame {
     uint pitch = 0;

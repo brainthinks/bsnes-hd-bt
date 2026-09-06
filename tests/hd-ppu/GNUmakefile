@@ -12,7 +12,7 @@ endif
 
 all: out/test
 
-out/test: test.cpp ../../bsnes/sfc/ppu-hd/gpu-mode7.hpp ../../bsnes/emulator/hdtoolkit.hpp ../../bsnes/emulator/m7extmap.hpp ../../bsnes/emulator/m7worldcache.hpp $(shader)
+out/test: test.cpp ../../bsnes/sfc/ppu-hd/gpu-mode7.hpp ../../bsnes/emulator/hdtoolkit.hpp $(shader)
 	mkdir -p out
 	$(compiler) $(flags) -o $@ test.cpp $(libs)
 

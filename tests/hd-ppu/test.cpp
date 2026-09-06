@@ -9,8 +9,6 @@
 
 #include "gpu-mode7.hpp"
 #include "emulator/hdtoolkit.hpp"
-#include "emulator/m7extmap.hpp"
-#include "emulator/m7worldcache.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -431,168 +429,6 @@ static auto testPacking() -> void {
   // A band straddling the tilemap's vertical wrap is rejected.
   CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 30, 3).count == 0);
 
-}
-
-static auto testMode7ExtendedMap() -> void {
-  // A file the loader should accept: 256x256 tiles, hardware window at 64,64.
-  std::string path = "/tmp/hd-ppu-test-extmap.m7x";
-  const unsigned tiles = 256, origin = 64;
-  {
-    auto file = fopen(path.c_str(), "wb");
-    CHECK(file != nullptr);
-    if(!file) return;
-    auto put16 = [&](unsigned v) { fputc(v & 0xff, file); fputc(v >> 8 & 0xff, file); };
-    fwrite("M7XM", 1, 4, file);
-    put16(1); put16(tiles); put16(tiles); put16(origin); put16(origin);
-    for(unsigned y = 0; y < tiles; y++) {
-      for(unsigned x = 0; x < tiles; x++) {
-        //author a border ring only: the hardware window stays unauthored
-        bool ring = x < origin || x >= origin + 128 || y < origin || y >= origin + 128;
-        put16(ring ? 77 : HdToolkit::Mode7ExtendedMap::Unmapped);
-      }
-    }
-    fclose(file);
-  }
-
-  HdToolkit::Mode7ExtendedMap map;
-  CHECK(map.load(path.c_str()));
-  CHECK(map.width() == tiles);
-  CHECK(map.height() == tiles);
-
-  unsigned tile = 0;
-  // Inside the hardware's own 1024x1024 window VRAM always wins, even where the
-  // map is authored, so a stale file can never corrupt the live picture.
-  CHECK(!map.lookup(0, 0, tile));
-  CHECK(!map.lookup(1023, 1023, tile));
-  // Just outside it, the authored ring answers.
-  CHECK(map.lookup(-8, 500, tile));
-  CHECK(tile == 77);
-  CHECK(map.lookup(1024, 500, tile));
-  CHECK(tile == 77);
-  CHECK(map.lookup(500, -1, tile));
-  CHECK(tile == 77);
-  // Past the extended map's own edge it defers rather than wrapping, so the
-  // hardware's behaviour still stands out there.
-  CHECK(!map.lookup(-513, 500, tile));
-  CHECK(!map.lookup(1536, 500, tile));
-
-  // A map whose ring is unauthored changes nothing anywhere.
-  {
-    auto file = fopen(path.c_str(), "wb");
-    if(file) {
-      auto put16 = [&](unsigned v) { fputc(v & 0xff, file); fputc(v >> 8 & 0xff, file); };
-      fwrite("M7XM", 1, 4, file);
-      put16(1); put16(tiles); put16(tiles); put16(origin); put16(origin);
-      for(unsigned n = 0; n < tiles * tiles; n++) put16(HdToolkit::Mode7ExtendedMap::Unmapped);
-      fclose(file);
-    }
-  }
-  HdToolkit::Mode7ExtendedMap blank;
-  CHECK(blank.load(path.c_str()));
-  CHECK(!blank.lookup(-8, 500, tile));
-  CHECK(!blank.lookup(2000, 2000, tile));
-
-  // Rejected: wrong magic, unsupported size, missing file.
-  {
-    auto file = fopen(path.c_str(), "wb");
-    if(file) { fwrite("XXXX", 1, 4, file); fclose(file); }
-  }
-  HdToolkit::Mode7ExtendedMap bad;
-  CHECK(!bad.load(path.c_str()));
-  CHECK(!bad.loaded());
-  CHECK(!bad.lookup(-8, 500, tile));
-  CHECK(!HdToolkit::Mode7ExtendedMap().load("/tmp/hd-ppu-test-extmap-missing.m7x"));
-  remove(path.c_str());
-
-  // A round trip through the dump: the hardware map lands in the middle and
-  // everything around it is left unauthored, so it renders as it does today.
-  {
-    static unsigned short vram[32768] = {};
-    for(unsigned n = 0; n < 16384; n++) vram[n] = 0x1200 | (n & 0xff);
-    std::string dumped = "/tmp/hd-ppu-test-extmap-dump.m7x";
-    CHECK(HdToolkit::Mode7ExtendedMap::dumpFromVram(dumped.c_str(), vram, 2));
-    HdToolkit::Mode7ExtendedMap back;
-    CHECK(back.load(dumped.c_str()));
-    CHECK(back.width() == 256);
-    CHECK(!back.lookup(64, 64, tile));    //inside the window: VRAM wins
-    CHECK(!back.lookup(-8, 64, tile));    //outside it: nothing was authored
-    remove(dumped.c_str());
-  }
-}
-
-static auto testMode7WorldCache() -> void {
-  HdToolkit::Mode7WorldCache cache;
-  unsigned tile = 0;
-  // Nothing is remembered until room is reserved, and a lookup that misses says
-  // so, which is what makes the caller fall back to the hardware.
-  CHECK(!cache.ready());
-  CHECK(!cache.lookup(0, 0, tile));
-
-  cache.reserve(12);
-  CHECK(cache.ready());
-  CHECK(cache.capacity() == 4096);
-  CHECK(cache.count() == 0);
-  CHECK(!cache.lookup(5, 7, tile));
-
-  cache.record(5, 7, 42);
-  CHECK(cache.count() == 1);
-  CHECK(cache.lookup(5, 7, tile));
-  CHECK(tile == 42);
-  // Negative world coordinates are ordinary: the player can drive either way.
-  cache.record(-1000, -2000, 9);
-  CHECK(cache.lookup(-1000, -2000, tile));
-  CHECK(tile == 9);
-  CHECK(!cache.lookup(-1000, -2001, tile));
-  // Rewriting a place replaces it rather than growing.
-  cache.record(5, 7, 43);
-  CHECK(cache.count() == 2);
-  CHECK(cache.lookup(5, 7, tile));
-  CHECK(tile == 43);
-
-  // Many distinct places: a table that fills evicts rather than misbehaving,
-  // and what survives is still correct.
-  for(int n = 0; n < 20000; n++) cache.record(n, n * 3, (unsigned)(n & 0xff));
-  unsigned found = 0, wrong = 0;
-  for(int n = 0; n < 20000; n++) {
-    if(!cache.lookup(n, n * 3, tile)) continue;
-    found++;
-    if(tile != (unsigned)(n & 0xff)) wrong++;
-  }
-  CHECK(found > 0);
-  CHECK(wrong == 0);
-  CHECK(cache.count() <= cache.capacity());
-
-  cache.clear();
-  CHECK(cache.count() == 0);
-  CHECK(!cache.lookup(5, 7, tile));
-
-  // The descriptor is data: two addresses and the constant each sits above the
-  // world coordinate. Nothing here knows which game it describes.
-  HdToolkit::Mode7WorldOrigin origin;
-  CHECK(!origin.valid);
-  CHECK(!origin.parse(nullptr));
-  CHECK(!origin.parse("nonsense"));
-  CHECK(origin.parse("7e00a8-2688,7e00aa-3504"));
-  CHECK(origin.valid);
-  CHECK(origin.addressX == 0x7e00a8);
-  CHECK(origin.addressY == 0x7e00aa);
-  CHECK(origin.deltaX == -2688);
-  CHECK(origin.deltaY == -3504);
-  auto read16 = [](unsigned address) -> unsigned {
-    return address == 0x7e00a8 ? 3645u : address == 0x7e00aa ? 3973u : 0u;
-  };
-  CHECK(origin.worldX(read16) == 3645 - 2688);
-  CHECK(origin.worldY(read16) == 3973 - 3504);
-  // A positive constant works the same way.
-  HdToolkit::Mode7WorldOrigin plus;
-  CHECK(plus.parse("7e0100+16,7e0102+32"));
-  CHECK(plus.deltaX == 16);
-  CHECK(plus.deltaY == 32);
-  // No constant at all is a plain read.
-  HdToolkit::Mode7WorldOrigin bare;
-  CHECK(bare.parse("7e0eb8,7e0eba"));
-  CHECK(bare.deltaX == 0);
-  CHECK(bare.deltaY == 0);
 }
 
 static auto testShaderSource(const std::string& path) -> void {
@@ -1037,8 +873,6 @@ auto main(int argc, char** argv) -> int {
   const char* shaderPath = argc > 1 ? argv[1] : "../../ruby/video/opengl/shaders.hpp";
   testPacking();
   testColorRamps();
-  testMode7ExtendedMap();
-  testMode7WorldCache();
   testShaderSource(shaderPath);
   testViewportSource();
 #ifdef HD_PPU_GL
