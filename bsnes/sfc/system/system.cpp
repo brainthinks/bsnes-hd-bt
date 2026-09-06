@@ -1,3 +1,4 @@
+#include <emulator/ramtrace.hpp>
 #include <sfc/sfc.hpp>
 
 namespace SuperFamicom {
@@ -108,6 +109,9 @@ auto System::runToSaveStrict() -> void {
 
 auto System::frameEvent() -> void {
   ppu.refresh();
+
+  //record work RAM for verifying a reimplementation; inert unless enabled
+  RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram));
 
   //refresh all cheat codes once per frame
   Memory::GlobalWriteEnable = true;

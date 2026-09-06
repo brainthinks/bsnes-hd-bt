@@ -1,4 +1,5 @@
 #include <nall/encode/bmp.hpp>
+#include <emulator/ramtrace.hpp>
 #include <emulator/hdtrace.hpp>
 #include <heuristics/heuristics.hpp>
 #include <heuristics/heuristics.cpp>
@@ -312,7 +313,17 @@ auto Program::audioFrame(const double* samples, uint channels) -> void {
 
 auto Program::inputPoll(uint port, uint device, uint input) -> int16 {
   int16 value = 0;
+  //Record what player one held, for the RAM trace; inert unless recording.
+  //The frontend cannot see the SNES enums, so: port 0 is Controller1 and
+  //device 1 is Gamepad, whose twelve inputs are what the recorder maps.
+  struct Record { uint port, device, input; int16 value; };
+  auto note = [](Record r) {
+    if(r.value && r.port == 0 && r.device == 1 && r.input < 12) {
+      RamTrace::recorder().press(r.input);
+    }
+  };
   if(int scripted = HdTrace::scriptedInput(input); scripted >= 0) {
+    note({port, device, input, (int16)scripted});
     if(getenv("BSNES_SCRIPT_DEBUG")) {
       static unsigned calls = 0, presses = 0;
       calls++; presses += scripted;
@@ -327,6 +338,7 @@ auto Program::inputPoll(uint port, uint device, uint input) -> int16 {
       value = mapping->poll();
     }
   }
+  note({port, device, input, value});
   if(movie.mode == Movie::Mode::Recording) {
     movie.input.append(value);
   } else if(movie.mode == Movie::Mode::Playing) {
