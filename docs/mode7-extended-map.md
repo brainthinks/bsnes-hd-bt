@@ -205,10 +205,37 @@ ahead of the player, and the game only streams a place as it approaches.** The
 cache holds what is behind. It should pay off on a second lap, and for looking
 sideways at ground already driven, and it cannot help a first pass.
 
-That promotes the speculative decoder from "nice to have" to the piece that
-makes this useful: snapshot the machine, run the game's own decode routine at a
-course position ahead of the player, harvest the buffer, restore. The cache is
-the right place to put what it returns, and it is already keyed correctly.
+**A second pass roughly doubles it, and then it stops.** Measured on F-Zero's
+attract demo, which drives a whole lap properly and repeats it. Title-screen
+stretches are excluded — there the world is a single static map and everything
+hits, which says nothing. Race segments only:
+
+| pass | cache at end | hit rate |
+|---|---|---|
+| first | 16,564 → 239,223 | **31.0%** |
+| second | 239,223 → 239,233 | **61.3%** |
+| third | 239,233 → 239,233 | 60.9% |
+
+So the cache saturates after one pass — it stops growing almost exactly, meaning
+the game has streamed everything it is ever going to — and repeat visits then
+serve about twice as many samples as the first.
+
+**But it plateaus at 61%, and that ceiling is real.** It is not capacity and not
+the data structure: at 2^22 slots instead of 2^20 the numbers are identical
+(31.1% and 61.2%), and the table never exceeded a quarter load. The remaining
+39% ask for world the game never streams at all — the far samples near the
+horizon reach hundreds to a couple of thousand map units out, and the game only
+ever loads a 1024-wide band along the course corridor.
+
+That reframes the speculative decoder. It was going to be the piece that made
+this useful, and it still covers the first pass — but it can only produce what
+the ROM's course data actually describes. Whether that data extends sideways
+far enough to serve the remaining 39%, or whether the course is a ribbon with
+nothing beside it, is now the load-bearing question for the whole idea, and it
+is unanswered. Worth settling before building the decoder.
+
+Also unmeasured: this is one track. Each track would fill its own world, and
+nothing has been checked about switching between them.
 
 ## What is left
 
@@ -286,8 +313,8 @@ the right place to put what it returns, and it is already keyed correctly.
 - The `.m7x` file the debug loader reads contains tile indices lifted from the
   ROM. It is a development artifact and must not be distributed; the shipping
   path reads tiles from the ROM at run time.
-- Measured: a first pass does not cover what the extension asks for, because the
-  camera looks at world the game has not streamed yet. Whether a *second* lap
-  covers it is still unmeasured, and worth knowing before building the
-  speculative decoder — if repeat visits fill it in, the decoder only has to
-  cover the first lap.
+- Measured: a first pass serves 31% of out-of-window samples, later passes 61%,
+  and the ceiling is not the cache. The open question is now whether the ROM's
+  course data describes the world beside the corridor at all. If it does not,
+  no amount of decoding helps and the remaining 39% needs authored content —
+  which the no-copied-assets rule permits, since new assets are fine.
