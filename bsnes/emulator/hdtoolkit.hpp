@@ -166,9 +166,11 @@ namespace HdToolkit {
       }
       if(matches) confirmed++;
     }
-    //one window may lag: a game that streams the panorama writes the upcoming
-    //window as it turns, so the wrap target is often stale
-    if(confirmed + 1 < best.count) return none;
+    //One window may lag: a game that streams the panorama writes the upcoming
+    //window as it turns, so the wrap target is often stale. Two confirmed
+    //windows are the least that distinguishes a panorama from a coincidence,
+    //so a two-window grid has to confirm both.
+    if(confirmed < 2 || confirmed + 1 < best.count) return none;
 
     //The panorama's length need not be a whole number of windows: F-Zero's
     //nearest layer closes after three and a half, so the last window's second

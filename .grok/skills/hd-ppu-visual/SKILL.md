@@ -129,6 +129,76 @@ Crop the left and right extra columns of the PNG (about 40/336 of the
 game picture each side at 16:9 + PAR). Those crops must show the floor
 continuing, not HUD, not black, not a wrapped next scanline.
 
+## Unattended runs: measure, do not only look
+
+A dumped PNG answers "does this look blurred". It cannot answer "is the right
+tile fetched at every heading" — the widescreen horizon has ~1000 distinct
+scroll positions per layer and a wrong one shows up as a seam or a popping
+tree only at a few of them. For that class of bug, drive the game and check
+the numbers.
+
+`bsnes/emulator/hdtrace.hpp` is the harness. Everything is env-gated and a
+no-op unless set.
+
+```bash
+BIN=/home/user/projects/bsnes-hd-bt/bsnes/out/bsnes
+ROM_DIR=/media/user/2020_obs_capture/games/bsneshd/roms
+
+DISPLAY=:0 BSNES_HEADLESS=1 \
+  BSNES_LOAD_STATE="Quick/Slot 3" \
+  BSNES_SCRIPT_INPUT="30:b,150:b+right" \
+  BSNES_TRACE_BG=/tmp/fz-trace.txt \
+  BSNES_FRAME_DIR=/tmp/fz BSNES_FRAME_AT="150,160,170" \
+  BSNES_QUIT_AFTER=910 \
+  "$BIN" "$ROM_DIR/F-Zero (U) [!].smc"
+```
+
+- `BSNES_HEADLESS=1` skips presenting the frame; the PPU's own dumps still
+  happen. **Use it for every unattended run.** Here `video.output()` blocks
+  about a second per frame through GLX at HD Mode 7 scale 8 — the same on a
+  pre-change baseline, so it is not PPU work — which turns a 900-frame sweep
+  into 15 minutes and leaves a window on the user's desktop. XShm does not
+  have the problem; the GL swap does.
+- `BSNES_SCRIPT_INPUT="frame:buttons,..."` holds buttons from a frame number
+  until the next waypoint; `+` combines (`b+right`). Names: up down left right
+  b a y x l r select start none.
+- `BSNES_QUIT_AFTER=N` exits after N frames. Always set it.
+- `BSNES_TRACE_BG` writes per-frame heading and per-line BG state (mode, tile
+  size, screen size, screen address, h/v offset, derived panorama grid).
+- `BSNES_DUMP_VRAM_AT="200,400"` dumps the tilemap into the trace;
+  `BSNES_DUMP_VRAM_BIN=<prefix>` writes raw VRAM + CGRAM for those frames, to
+  decode offline when the question is "how does this game store the horizon".
+- `BSNES_NO_PAN=1` disables the panorama path, for A/B.
+
+Driving: F-Zero `B` accelerates and steering only turns while moving, so
+`"30:b,150:b+right"` from `Quick/Slot 3` sweeps 360 degrees repeatedly. Mario
+Kart `Quick/Slot 2` is paused, so `"30:b,120:b+left"` resumes and turns.
+
+### A/B two builds honestly
+
+Two traps make an A/B lie:
+
+1. **Save RAM.** Auto-save rewrites the game's `.srm` on exit, so the second
+   run starts from a different save than the first and the games diverge for
+   reasons that have nothing to do with the change. Copy the ROM **and its
+   `.srm`** into a fresh directory for each side. Without this, Yoshi's Island
+   and Super Metroid "differ" and Mario Kart looks 100% changed.
+2. **Leftover bsnes.** A run that outlives its shell keeps a window open and
+   rewrites `settings.bml` on exit, silently undoing a restore. Kill by exact
+   `comm` (see the top of this file) after every run, and never edit
+   `~/.config/bsnes-hd-bt/settings.bml` — pass `--settings=` a copy.
+
+### The invariant to assert
+
+For any widescreen BG change, compare the two sides per column and assert that
+**no changed column lies inside renderX 0..255** (output x 64..319 at 16:9).
+Inside the 256-pixel picture the hardware's own wrapping *is* the picture; only
+the extension may move. Separately, re-run with widescreen off and require the
+frames to be byte-identical.
+
+That pair caught every mistake in the horizon-panorama work, including one the
+PNGs looked fine for.
+
 ## Iterate
 
 1. Kill bsnes.

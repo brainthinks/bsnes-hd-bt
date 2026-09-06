@@ -355,6 +355,30 @@ static auto testPacking() -> void {
   CHECK(HdToolkit::panoramaAdjust(shortLoop, 11, -1, h, v));
   CHECK(h == 256 && v == -7 * 8);
 
+  // The visible band can sit in the window that wraps, where the second half
+  // does not repeat the row `height` further down. Deriving the grid from an
+  // anchor inside the band finds nothing there; it has to come from the run of
+  // rows elsewhere in the map. F-Zero's far layer silently lost its grid at
+  // some headings this way.
+  build(3, 11);
+  auto wrapBand = HdToolkit::panoramaGrid(panorama, map, 32, 0, 25, 31);
+  CHECK(wrapBand.count == 3);
+  CHECK(wrapBand.base == 11);
+  CHECK(wrapBand.height == 7);
+  CHECK(HdToolkit::panoramaAdjust(wrapBand, 25, -1, h, v));
+  CHECK(h == 256 && v == -7 * 8);
+  CHECK(HdToolkit::panoramaAdjust(wrapBand, 25, 512, h, v));
+  CHECK(h == -512 && v == -7 * 8);
+
+  // A game that streams the panorama writes the upcoming window as it turns, so
+  // the wrap target is often half written. One stale window must not throw the
+  // grid away; two must.
+  build(3, 11);
+  for(unsigned y = 0; y < 7; y++) panorama[map + 1024 + (25 + y) * 32 + 9] ^= 0x1234;
+  CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 11, 17).count == 3);
+  for(unsigned y = 0; y < 7; y++) panorama[map + 1024 + (18 + y) * 32 + 9] ^= 0x1234;
+  CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 11, 17).count == 0);
+
   // Super Mario Kart's shape: four four-row windows on a 64x64 tilemap, in
   // mode 0 on BG3. Rows 32..63 of such a map live at a separate word offset.
   {
@@ -384,6 +408,16 @@ static auto testPacking() -> void {
   CHECK(h == 256 && v == 3 * 4 * 8);
   CHECK(HdToolkit::panoramaAdjust(wide, 44, -1, h, v));
   CHECK(h == 256 && v == -4 * 8);
+  // A band several tile rows tall can cross from one window into the next, as
+  // Mario Kart's does; the grid still fits and each row resolves its own window.
+  auto crossing = HdToolkit::panoramaGrid(panorama, map, 64, 2048, 43, 45);
+  CHECK(crossing.count == 4);
+  CHECK(crossing.base == 40);
+  CHECK(HdToolkit::panoramaAdjust(crossing, 43, -1, h, v));
+  CHECK(h == 256 && v == 3 * 4 * 8);   //row 43 is the first window
+  CHECK(HdToolkit::panoramaAdjust(crossing, 45, -1, h, v));
+  CHECK(h == 256 && v == -4 * 8);      //row 45 is the second
+
   // A 64-row map is not searched as if it were 32 rows.
   CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 8, 12).count == 0);
 

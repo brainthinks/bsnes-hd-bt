@@ -45,6 +45,20 @@ Accurate and Fast stay hardware-accurate and must not change. HD is opt-in.
 5. **No regressions** — do not break Accurate/Fast, save states, or an HD
    feature that already worked (SS, perspective, fog color math, cylinder
    non-perspective groups, true color).
+6. **Widescreen BG extension is derived, never keyed to a game.** Games store
+   horizon panoramas in layouts the emulator has to infer from VRAM — window
+   size, window count, loop length, which layer, which mode. Fit it from the
+   tilemap and decline when it does not fit; a background that is not laid out
+   that way must render exactly as before. Do not special-case a title, a
+   screen address, or a BG index: F-Zero puts its panorama on BG1/BG2 in mode
+   1 on a 64x32 map, Super Mario Kart on BG3/BG4 in mode 0 on a 64x64 map, and
+   a rule shaped around either one silently does nothing for the other.
+   Two hard invariants, both cheap to assert and both worth asserting:
+   **no column inside renderX 0..255 may change** — inside the 256-pixel
+   picture the hardware's own wrapping *is* the picture — and **4:3 output
+   must stay byte-identical**. Verify across every window and scroll position,
+   not at the one heading a screenshot happened to catch;
+   `.grok/skills/hd-ppu-visual/SKILL.md` has the unattended loop.
 
 ## Architecture
 
@@ -83,6 +97,9 @@ Still required, not a signed-off look:
   FF6 world map, Contra III EXTBG, Chrono Trigger, …).
 - Fast/Accurate unchanged; HD+CPU still runs without OpenGL 3.2.
 
-Automated locks: `make -C tests/hd-ppu run`. Visual recipe:
+Automated locks: `make -C tests/hd-ppu run`. Panorama-layout behaviour is
+locked there too (window grids, short loops, 64-row maps, a band sitting in
+the window that wraps, a half-written wrap window) — extend those rather than
+re-deriving a layout by hand. Visual recipe:
 `.grok/skills/hd-ppu-visual/SKILL.md`. What has been run lives in
 `docs/hd-ppu-next.md` Tests.
