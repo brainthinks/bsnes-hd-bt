@@ -36,12 +36,19 @@ paging register. It occupies the low half of VRAM interleaved — tilemap in the
 low bytes of words $0000–$3FFF, 256 tiles of pixel data in the high bytes — and
 F-Zero's sky and HUD occupy the upper half ($6000 tiles, $7800 map).
 
-**Streamed history cannot be stitched.** Successive map states do not align
-under any translation: the best shift matches no better than no shift at all
-(87% vs 86%, 69% vs 69%, 75% vs 75%). The game re-authors the neighbourhood
-around the car rather than scrolling a window through a larger world, so there
-is no consistent coordinate frame to accumulate into. (Coarse correlation over
-repetitive city tiles — indicative, not proof, but enough not to build on.)
+**How the streaming actually works.** The map is expanded into WRAM at
+$7F:4A00–4BFF and DMA'd to VRAM: about 512 bytes a frame in steady driving,
+three blocks of 256/128/128 plus a small 69-byte one. So the course data in ROM
+is encoded and the game decodes it into that buffer; the emulator can see both
+the buffer and the destination address of every block.
+
+**Whether the streamed history can be stitched is still open.** An early test
+said no — successive whole maps do not align under any translation (best shift
+87% vs 86% for no shift, 69% vs 69%, 75% vs 75%). That test was poor: it
+correlated maps captured far apart, by which point nearly every column had been
+replaced, over highly repetitive city tiles. Watching the per-block destinations
+instead is a much better shot and has not been tried. Do not treat "cannot be
+stitched" as established.
 
 **How much extra map would be needed.** Per scanline, the span of map
 coordinates the visible floor reaches, in multiples of the hardware map
@@ -83,10 +90,11 @@ is no reason to duplicate tile art and every reason not to.
 **Origin in whole tiles.** The window origin is a tile coordinate, so the
 sub-tile offset (`pixelX & 7`) is unaffected and the palette fetch is unchanged.
 
-**A file loader, not a ROM channel, for now.** The eventual mechanism has to be
-a side channel the ROM hack writes, because the emulator cannot infer the world
-layout (see above). A file gets the rendering half proven and lets the result be
-seen before any 65816 exists.
+**A file loader first, whatever supplies the data later.** The rendering half is
+independent of where the tiles come from, so it was worth proving on its own. It
+was originally assumed the supply had to be a ROM hack writing through a side
+channel; that assumption is wrong (see below) and the loader deliberately does
+not encode it.
 
 ## What exists now
 
@@ -128,18 +136,31 @@ wrapped, and `MARK` shows exactly which pixels came from it.
    rightly calls not the HD look. Teaching the shader a larger texture is the
    next piece of rendering work and is not hard; the texture upload and the
    sampler wrap are the only parts that change.
-2. **The ROM-hack side channel.** The hack must publish, per frame, the tile
-   data for the surrounding world and the origin of the hardware window within
-   it. An emulator-recognised write port or a magic DMA target both work; pick
-   an address that is inert on real hardware. This is the part the emulator
-   cannot do for itself.
+2. **Where the tiles come from.** The SNES CPU does not have to produce them —
+   an earlier note here claimed the hack would have to decode 2–4x more course
+   on a 3.58MHz CPU, and that was wrong. Three tiers, cheapest first:
+
+   a. **Watch what the game already produces.** The emulator sees every
+      streamed block and where it lands. Nothing extra runs. The open problem
+      is placing blocks in a global frame, which is the stitching question
+      above — currently the most promising route and the one to try first.
+
+   b. **Run the game's own decoder speculatively.** bsnes already serializes
+      complete machine state, so a snapshot can be taken, the decode routine
+      pointed at a course position the game has not asked for, run, the WRAM
+      buffer harvested, and the snapshot restored. Cost on the host is
+      nothing. Needs the routine's entry point and the input that selects a
+      position — per-game reverse engineering, but modest, and no ROM hack.
+
+   c. **Decode from ROM on the host.** Full format reverse engineering. Most
+      work, most control, still no ROM hack.
+
+   A ROM hack writing through an emulator-recognised port remains an option and
+   is the only one that needs no reverse engineering, but it is now the last
+   resort rather than the plan.
 3. **Configuration.** Replace the env hooks with an HD PPU option, default off,
-   engaging only when a ROM supplies extended data, so every other game stays
+   engaging only when extended data is available, so every other game stays
    bit-identical.
-4. **Cost on the game side.** The hack has to decompress and lay out 2–4x more
-   course than it does now, on a 3.58MHz CPU, while streaming. The emulator
-   absorbs the storage, not the CPU time. This is the real risk to the whole
-   idea and has not been assessed.
 
 ## Open questions
 
@@ -151,3 +172,6 @@ wrapped, and `MARK` shows exactly which pixels came from it.
   wider aspect ratios should be sampled before fixing on 2x versus 4x.
 - Nothing has been tried on a game other than F-Zero. Mario Kart's Mode 7 floor
   has not been looked at from this angle at all.
+- Every route in (2) needs the same thing in the end: the mapping from streamed
+  block to world position. That, not the decoding and not the storage, is the
+  problem to solve.
