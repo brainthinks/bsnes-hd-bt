@@ -215,6 +215,7 @@ auto EnhancementSettings::create() -> void {
   mode7WsAspect.append(ComboButtonItem().setText("16:9").setAttribute("ws", 1609));
   mode7WsAspect.append(ComboButtonItem().setText("16:10").setAttribute("ws", 1610));
   mode7WsAspect.append(ComboButtonItem().setText("21:9").setAttribute("ws", 2109));
+  mode7WsAspect.append(ComboButtonItem().setText("32:9").setAttribute("ws", 3209));
   mode7WsAspect.append(ComboButtonItem().setText("2:1").setAttribute("ws", 201));
   mode7WsAspect.append(ComboButtonItem().setText("4:3").setAttribute("ws", 403));
   mode7WsAspect.onChange([&] {

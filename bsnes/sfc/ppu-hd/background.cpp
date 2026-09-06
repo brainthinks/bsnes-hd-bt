@@ -79,8 +79,8 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
   bool autoCrop = wsDec.autoCrop;
   int globalWs = (int)ppu.widescreen();
 
-  bool windowAbove[448];
-  bool windowBelow[448];
+  bool windowAbove[HdToolkit::maxLineWidth];
+  bool windowBelow[HdToolkit::maxLineWidth];
   renderWindow(self.window, self.window.aboveEnable, windowAbove, (uint)globalWs);
   renderWindow(self.window, self.window.belowEnable, windowBelow, (uint)globalWs);
 

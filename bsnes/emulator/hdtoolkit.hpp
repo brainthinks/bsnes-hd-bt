@@ -3,7 +3,12 @@
 namespace HdToolkit {
   // DerKoun widescreen width on each side, in SNES pixels (multiple of 8).
   // Values > 200 are aspect codes: 1609 = 16:9, 1610 = 16:10, 2109 = 21:9,
-  // 201 = 2:1, 403 = 4:3.
+  // 3209 = 32:9 (super ultrawide), 201 = 2:1, 403 = 4:3.
+  // 256px/side is 32:9 at 216 lines. The old 96px cap was a sprite wrap
+  // limit; extras are backgrounds, so 32:9 is allowed to be wider than 21:9.
+  static constexpr int maxWsExt = 256;
+  static constexpr int maxLineWidth = 256 + 2 * maxWsExt;
+
   static constexpr auto determineWsExt(int ws, bool overscan, bool aspectCorrection) -> int {
     (void)aspectCorrection;
     double val = ws;
@@ -25,7 +30,8 @@ namespace HdToolkit {
     if(overscan) val += 0.5;
     ws = (int)val;
     if(ws <= 0) return 0;
-    if(ws > 12) ws = 12;  // 96px/side; sprite wrap limit
+    int maxTiles = maxWsExt / 8;
+    if(ws > maxTiles) ws = maxTiles;
     return ws * 8;
   }
 

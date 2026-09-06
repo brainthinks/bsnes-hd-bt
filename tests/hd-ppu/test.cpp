@@ -267,6 +267,10 @@ static auto testPacking() -> void {
   CHECK(HdToolkit::determineWsExt(64, false, false) == 64);
   CHECK(HdToolkit::determineWsExt(1609, false, false) == 64);
   CHECK(HdToolkit::determineWsExt(1609, false, true) == 64);
+  CHECK(HdToolkit::determineWsExt(2109, false, false) == 120);
+  CHECK(HdToolkit::determineWsExt(3209, false, false) == 256);
+  CHECK(HdToolkit::determineWsExt(3209, false, true) == 256);
+  CHECK(HdToolkit::maxLineWidth == 768);
   CHECK(HdToolkit::determineWsExt(403, false, false) == 16);
 
   auto hud = HdToolkit::decideWsBg(16, 20, 0, 0, 0, 40, false);
