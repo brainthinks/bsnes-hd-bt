@@ -17,7 +17,7 @@ Goals and priorities
   - [x] Crisp, raw pixels, no blurring
   - [x] Configurable supersampling
 - [x] Improved Linux performance
-- [ ] Improved support for modern controls (likely SDL3)
+- [x] Improved support for modern controls (likely SDL3)
 - [ ] Meet or exceed parity with all desirable [bsnes-hd](https://github.com/DerKoun/bsnes-hd) features
   - [x] 24-bit color
   - [ ] Widescreen support

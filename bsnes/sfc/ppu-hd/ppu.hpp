@@ -1,3 +1,4 @@
+#include <emulator/hdtoolkit.hpp>
 //performance-focused, scanline-based, parallelized implementation of PPU
 
 //limitations:
@@ -24,6 +25,12 @@ struct PPU : PPUcounter {
   alwaysinline auto deinterlace() const -> bool;
   alwaysinline auto renderCycle() const -> uint;
   alwaysinline auto noVRAMBlocking() const -> bool;
+  alwaysinline auto widescreen() const -> uint;
+  alwaysinline auto widescreenRaw() const -> uint;
+  alwaysinline auto lineWidth() const -> uint;
+  alwaysinline auto winXad(int x) const -> uint;
+  alwaysinline auto wsOverride() const -> bool;
+  alwaysinline auto wsbg(uint bg) const -> uint;
 
   //ppu.cpp
   PPU();
@@ -300,11 +307,15 @@ public:
     auto blend(uint x, uint y, bool halve) const -> uint32;
     alwaysinline auto directColor(uint paletteIndex, uint paletteColor) const -> uint16;
     alwaysinline auto decode(uint15 color) const -> uint32;
-    alwaysinline auto plotAbove(uint x, uint8 source, uint8 priority, uint32 color) -> void;
-    alwaysinline auto plotBelow(uint x, uint8 source, uint8 priority, uint32 color) -> void;
-    alwaysinline auto plotHD(Pixel*, uint x, uint8 source, uint8 priority, uint32 color, bool hires, bool subpixel) -> void;
+    alwaysinline auto plotAbove(int x, uint8 source, uint8 priority, uint32 color) -> void;
+    alwaysinline auto plotBelow(int x, uint8 source, uint8 priority, uint32 color) -> void;
+    alwaysinline auto plotHD(Pixel*, int x, uint8 source, uint8 priority, uint32 color, bool hires, bool subpixel) -> void;
 
     //background.cpp
+    static auto cacheBackgroundPanoramas() -> void;
+    //derived rendering data, never serialized
+    HdToolkit::PanoramaGrid panorama[4] = {};
+    uint panoramaFirstRow[4] = {};
     auto renderBackground(PPU::IO::Background&, uint8 source) -> void;
     auto getTile(PPU::IO::Background&, uint hoffset, uint voffset) -> uint;
 
@@ -330,6 +341,7 @@ public:
 
     //window.cpp
     auto renderWindow(PPU::IO::WindowLayer&, bool enable, bool output[256]) -> void;
+    auto renderWindow(PPU::IO::WindowLayer&, bool enable, bool* output, uint ws) -> void;
     auto renderWindow(PPU::IO::WindowColor&, uint mask,   bool output[256]) -> void;
 
   //unserialized:
@@ -342,8 +354,8 @@ public:
     ObjectItem items[128];  //32 on real hardware
     ObjectTile tiles[128];  //34 on real hardware; 1024 max (128 * 64-width tiles)
 
-    Pixel above[256 * 9 * 9];
-    Pixel below[256 * 9 * 9];
+    Pixel above[448 * 9 * 9];
+    Pixel below[448 * 9 * 9];
 
     bool windowAbove[256];
     bool windowBelow[256];
@@ -357,6 +369,8 @@ public:
   Line lines[240];
 
   //used to help detect when the video output size changes between frames to clear overscan area.
+  uint wsExt = 0;
+
   struct Frame {
     uint pitch = 0;
     uint width = 0;

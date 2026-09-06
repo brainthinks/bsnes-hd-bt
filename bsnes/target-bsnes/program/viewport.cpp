@@ -1,9 +1,26 @@
 extern uint16_t SnowData[800];
 extern  uint8_t SnowVelDist[800];
 
+auto Program::overscanCropRows(uint width, uint scale) const -> uint {
+  if(settings.video.overscan) return 0;
+  if(scale < 1) scale = 1;
+  // 16:9 extra width is computed for 216 visible lines. Crop 12 per
+  // side when the framebuffer is widescreen so the picture fills 16:9.
+  return (width / scale > 256) ? 12 : 8;
+}
+
 auto Program::viewportSize(uint& width, uint& height, uint scale) -> void {
-  uint videoWidth = 256 * (settings.video.aspectCorrection ? 8.0 / 7.0 : 1.0);
-  uint videoHeight = (settings.video.overscan ? 240.0 : 224.0);
+  // Widescreen frames are wider than 256. Using a hardcoded 256 here
+  // letterboxes HD Mode 7 into 4:3 on a 16:9 display.
+  if(scale < 1) scale = 1;
+  uint snesW = width / scale;
+  // Widescreen already chose extra columns for the target AR. Applying
+  // 8:7 PAR here stretches those tiles. Keep PAR for 256-wide frames.
+  bool par = settings.video.aspectCorrection && snesW <= 256;
+  uint videoWidth = snesW * (par ? 8.0 / 7.0 : 1.0);
+  uint videoHeight = height / scale;
+  if(videoWidth < 1) videoWidth = 256 * (settings.video.aspectCorrection ? 8.0 / 7.0 : 1.0);
+  if(videoHeight < 1) videoHeight = (settings.video.overscan ? 240.0 : 224.0);
 
   auto [viewportWidth, viewportHeight] = video.size();
 
@@ -54,13 +71,13 @@ auto Program::viewportRefresh() -> void {
     height = screenshot.height;
     scale  = screenshot.scale;
 
-    if(!settings.video.overscan) {
+    if(uint crop = overscanCropRows(width, scale)) {
       uint multiplier = height / 240;
-      data32 += 8 * multiplier * (pitch >> 2);
-      height -= 16 * multiplier;
+      data32 += crop * multiplier * (pitch >> 2);
+      height -= crop * 2 * multiplier;
     }
 
-    uint outputWidth, outputHeight;
+    uint outputWidth = width, outputHeight = height;
     viewportSize(outputWidth, outputHeight, scale);
 
     if(auto [output, length] = video.acquire(width, height); output) {
@@ -84,13 +101,13 @@ auto Program::viewportRefresh() -> void {
     scale  = screenshot.scale;
   }
 
-  if(!settings.video.overscan) {
+  if(uint crop = overscanCropRows(width, scale)) {
     uint multiplier = height / 240;
-    data += 8 * multiplier * (pitch >> 1);
-    height -= 16 * multiplier;
+    data += crop * multiplier * (pitch >> 1);
+    height -= crop * 2 * multiplier;
   }
 
-  uint outputWidth, outputHeight;
+  uint outputWidth = width, outputHeight = height;
   viewportSize(outputWidth, outputHeight, scale);
 
   uint filterWidth = width, filterHeight = height;

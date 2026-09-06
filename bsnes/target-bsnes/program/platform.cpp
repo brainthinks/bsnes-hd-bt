@@ -1,4 +1,5 @@
 #include <nall/encode/bmp.hpp>
+#include <emulator/hdtrace.hpp>
 #include <heuristics/heuristics.hpp>
 #include <heuristics/heuristics.cpp>
 #include <heuristics/super-famicom.cpp>
@@ -214,13 +215,13 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
   screenshot.scale  = scale;
 
   pitch >>= 1;
-  if(!settings.video.overscan) {
+  if(uint crop = overscanCropRows(width, scale)) {
     uint multiplier = height / 240;
-    data += 8 * multiplier * pitch;
-    height -= 16 * multiplier;
+    data += crop * multiplier * pitch;
+    height -= crop * 2 * multiplier;
   }
 
-  uint outputWidth, outputHeight;
+  uint outputWidth = width, outputHeight = height;
   viewportSize(outputWidth, outputHeight, scale);
 
   uint filterWidth = width, filterHeight = height;
@@ -258,13 +259,13 @@ auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height
   screenshot.scale  = scale;
 
   uint pixelPitch = pitch >> 2;
-  if(!settings.video.overscan) {
+  if(uint crop = overscanCropRows(width, scale)) {
     uint multiplier = height / 240;
-    data += 8 * multiplier * pixelPitch;
-    height -= 16 * multiplier;
+    data += crop * multiplier * pixelPitch;
+    height -= crop * 2 * multiplier;
   }
 
-  uint outputWidth, outputHeight;
+  uint outputWidth = width, outputHeight = height;
   viewportSize(outputWidth, outputHeight, scale);
 
   if(auto [output, length] = video.acquire(width, height); output) {
@@ -306,6 +307,15 @@ auto Program::audioFrame(const double* samples, uint channels) -> void {
 
 auto Program::inputPoll(uint port, uint device, uint input) -> int16 {
   int16 value = 0;
+  if(int scripted = HdTrace::scriptedInput(input); scripted >= 0) {
+    if(getenv("BSNES_SCRIPT_DEBUG")) {
+      static unsigned calls = 0, presses = 0;
+      calls++; presses += scripted;
+      if((calls % 600) == 0) fprintf(stderr, "[script] f=%u calls=%u presses=%u port=%u dev=%u\n",
+        HdTrace::frame(), calls, presses, port, device);
+    }
+    return scripted;
+  }
   if(focused() || inputSettings.allowInput().checked()) {
     inputManager.poll();
     if(auto mapping = inputManager.mapping(port, device, input)) {

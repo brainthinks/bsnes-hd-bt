@@ -221,7 +221,7 @@ static string OpenGLMode7FragmentShader = R"(
 
   vec4 shadeM7(vec4 texel, vec2 snes, int y) {
     if(texel.a < 0.02 && texel.r + texel.g + texel.b < 0.01) return vec4(0.0);
-    int wx = int(clamp(snes.x, 0.0, 255.0));
+    int wx = (snes.x < 0.0 || snes.x >= 256.0) ? 128 : int(clamp(snes.x, 0.0, 255.0));
     vec3 rgb = applyMath(texel.rgb, y, wx);
     // HDMA fog changes at SNES scanlines. Reconstruct its continuous
     // colour ramp at the sample position, without filtering the texture
@@ -305,10 +305,13 @@ static string OpenGLMode7FragmentShader = R"(
       fragColor = vec4(spr.rgb, 1.0);
       return;
     }
-    float scale = max(sourceSize.x / 256.0, 1.0);
-    float snesH = sourceSize.y / scale;
-    vec2 snes = vec2(texCoord.x * 256.0, lineOrigin + texCoord.y * snesH);
-    vec2 pixel = vec2(256.0, snesH) / max(targetSize.xy, vec2(1.0));
+    // GPU Mode 7 reads the 1× CPU composite. Widescreen makes that
+    // (256+2*ws) wide; texCoord.x=0 is SNES x=-ws.
+    float snesW = max(sourceSize.x, 1.0);
+    float snesH = max(sourceSize.y, 1.0);
+    float ws = max(0.0, (snesW - 256.0) * 0.5);
+    vec2 snes = vec2(texCoord.x * snesW - ws, lineOrigin + texCoord.y * snesH);
+    vec2 pixel = vec2(snesW, snesH) / max(targetSize.xy, vec2(1.0));
     // Filter support is exactly one output pixel. Expanding it (gaussian,
     // 3× taper, 1-SNES kernel) mixed neighboring pixels and looked blurry.
     // Far banding is handled by integrating the texels that already sit

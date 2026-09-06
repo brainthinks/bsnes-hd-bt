@@ -200,6 +200,65 @@ auto EnhancementSettings::create() -> void {
     activeMode7().mosaic = mode7Mosaic.checked();
     emulator->configure(mode7Path("Mosaic"), activeMode7().mosaic);
   });
+  mode7WsModeLabel.setText("Widescreen:");
+  mode7WsMode.append(ComboButtonItem().setText("Off").setAttribute("mode", 0));
+  mode7WsMode.append(ComboButtonItem().setText("Mode 7").setAttribute("mode", 1));
+  mode7WsMode.append(ComboButtonItem().setText("All").setAttribute("mode", 2));
+  mode7WsMode.onChange([&] {
+    if(loadingMode7) return;
+    if(auto item = mode7WsMode.selected()) {
+      settings.emulator.hack.ppu.hdMode7.wsMode = item.attribute("mode").natural();
+      emulator->configure("Hacks/PPU/HDMode7/WsMode", settings.emulator.hack.ppu.hdMode7.wsMode);
+    }
+  });
+  mode7WsAspectLabel.setText("Aspect:");
+  mode7WsAspect.append(ComboButtonItem().setText("16:9").setAttribute("ws", 1609));
+  mode7WsAspect.append(ComboButtonItem().setText("16:10").setAttribute("ws", 1610));
+  mode7WsAspect.append(ComboButtonItem().setText("21:9").setAttribute("ws", 2109));
+  mode7WsAspect.append(ComboButtonItem().setText("2:1").setAttribute("ws", 201));
+  mode7WsAspect.append(ComboButtonItem().setText("4:3").setAttribute("ws", 403));
+  mode7WsAspect.onChange([&] {
+    if(loadingMode7) return;
+    if(auto item = mode7WsAspect.selected()) {
+      settings.emulator.hack.ppu.hdMode7.widescreen = item.attribute("ws").natural();
+      emulator->configure("Hacks/PPU/HDMode7/Widescreen", settings.emulator.hack.ppu.hdMode7.widescreen);
+    }
+  });
+  auto fillWsBg = [&](ComboButton& combo) {
+    static const char* labels[] = {
+      "Off", "On",
+      "<40", ">40", "<80", ">80", "<120", ">120", "<160", ">160", "<200", ">200",
+      "crop", "cropAuto", "disable", "autoHor", "autoHor&Ver"
+    };
+    for(uint n : range(17)) {
+      combo.append(ComboButtonItem().setText(labels[n]).setAttribute("conf", n));
+    }
+  };
+  auto bindWsBg = [&](ComboButton& combo, uint& value, string key) {
+    combo.onChange([&, key] {
+      if(loadingMode7) return;
+      if(auto item = combo.selected()) {
+        value = item.attribute("conf").natural();
+        emulator->configure({"Hacks/PPU/HDMode7/", key}, value);
+      }
+    });
+  };
+  mode7WsBg1Label.setText("BG1:");
+  mode7WsBg2Label.setText("BG2:");
+  mode7WsBg3Label.setText("BG3:");
+  mode7WsBg4Label.setText("BG4:");
+  fillWsBg(mode7WsBg1);
+  fillWsBg(mode7WsBg2);
+  fillWsBg(mode7WsBg3);
+  fillWsBg(mode7WsBg4);
+  mode7WsBg1.setToolTip("Widescreen for background layer 1. autoHor&Ver (default) keeps screen-locked HUDs at 256. On walks the tilemap into extra columns.");
+  mode7WsBg2.setToolTip("Widescreen for background layer 2.");
+  mode7WsBg3.setToolTip("Widescreen for background layer 3.");
+  mode7WsBg4.setToolTip("Widescreen for background layer 4.");
+  bindWsBg(mode7WsBg1, settings.emulator.hack.ppu.hdMode7.wsbg1, "Wsbg1");
+  bindWsBg(mode7WsBg2, settings.emulator.hack.ppu.hdMode7.wsbg2, "Wsbg2");
+  bindWsBg(mode7WsBg3, settings.emulator.hack.ppu.hdMode7.wsbg3, "Wsbg3");
+  bindWsBg(mode7WsBg4, settings.emulator.hack.ppu.hdMode7.wsbg4, "Wsbg4");
   mode7Refresh.onActivate([&] {
     mode7Refresh.setEnabled(false);
     reloadMode7Widgets();
@@ -258,6 +317,37 @@ auto EnhancementSettings::reloadMode7Widgets() -> void {
   mode7Sampler.setVisible(hd);
   mode7Sampler.item(settings.emulator.hack.ppu.hdMode7.gpuSupersample ? 1 : 0).setSelected();
   mode7Mosaic.setVisible(!hd);
+  mode7WsModeLabel.setVisible(hd);
+  mode7WsMode.setVisible(hd);
+  mode7WsAspectLabel.setVisible(hd);
+  mode7WsAspect.setVisible(hd);
+  mode7WsBg1Label.setVisible(hd);
+  mode7WsBg1.setVisible(hd);
+  mode7WsBg2Label.setVisible(hd);
+  mode7WsBg2.setVisible(hd);
+  mode7WsBg3Label.setVisible(hd);
+  mode7WsBg3.setVisible(hd);
+  mode7WsBg4Label.setVisible(hd);
+  mode7WsBg4.setVisible(hd);
+  {
+    uint mode = settings.emulator.hack.ppu.hdMode7.wsMode;
+    if(mode > 2) mode = 0;
+    mode7WsMode.item(mode).setSelected();
+    uint ws = settings.emulator.hack.ppu.hdMode7.widescreen;
+    for(uint n : range(mode7WsAspect.itemCount())) {
+      if(mode7WsAspect.item(n).attribute("ws").natural() == ws) {
+        mode7WsAspect.item(n).setSelected();
+      }
+    }
+    auto selectBg = [&](ComboButton& combo, uint value) {
+      if(value > 16) value = 16;
+      combo.item(value).setSelected();
+    };
+    selectBg(mode7WsBg1, settings.emulator.hack.ppu.hdMode7.wsbg1);
+    selectBg(mode7WsBg2, settings.emulator.hack.ppu.hdMode7.wsbg2);
+    selectBg(mode7WsBg3, settings.emulator.hack.ppu.hdMode7.wsbg3);
+    selectBg(mode7WsBg4, settings.emulator.hack.ppu.hdMode7.wsbg4);
+  }
   uint factor = m7.ssFactor < 1 ? 1 : m7.ssFactor;
   for(uint n : range(mode7SsFactor.itemCount())) {
     if(mode7SsFactor.item(n).attribute("factor").natural() == factor) {
@@ -276,6 +366,8 @@ auto EnhancementSettings::reloadMode7Widgets() -> void {
   ppuScanlineLayout.resize();
   loadingMode7 = false;
   mode7Layout.resize();
+  mode7WsLayout.resize();
+  mode7WsBgLayout.resize();
 }
 
 auto EnhancementSettings::ppuRendererChanged() -> void {

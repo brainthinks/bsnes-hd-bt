@@ -23,6 +23,8 @@ struct Configuration {
   } system;
 
   struct Video {
+    bool aspectCorrection = false;
+    bool overscan = false;
     bool blurEmulation = true;
     bool colorEmulation = true;
     uint luminance = 100;
@@ -54,6 +56,13 @@ struct Configuration {
         uint ssFactor = 1;
         bool mosaic = true;
         bool gpuSupersample = false;
+        uint wsMode = 0;       // 0 off, 1 Mode 7, 2 all
+        uint widescreen = 1609;  // 16:9
+        uint wsbg1 = 16, wsbg2 = 16, wsbg3 = 16, wsbg4 = 16;
+        uint wsobj = 0;        // 0 safe, 1 unsafe, 2 clip, 3 disable
+        uint igwin = 1;
+        uint igwinx = 128;
+        uint wsBgCol = 1;      // 0 color, 1 auto, 2 black
       } mode7, hdMode7{5, true, true, 4, false, true};
     } ppu;
     struct DSP {

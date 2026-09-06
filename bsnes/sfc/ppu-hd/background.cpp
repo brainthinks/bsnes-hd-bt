@@ -1,12 +1,68 @@
+#include <emulator/hdtoolkit.hpp>
+
+auto PPU::Line::cacheBackgroundPanoramas() -> void {
+  for(uint n = 0; n < count; n++) {
+    auto& line = ppu.lines[start + n];
+    for(uint bg = 0; bg < 4; bg++) {
+      line.panorama[bg] = {};
+      line.panoramaFirstRow[bg] = 0;
+    }
+  }
+  if(!ppu.widescreen() || ppu.wsOverride()) return;
+  if(getenv("BSNES_NO_PAN")) return;  //experiment: plain hardware wrapping only
+  // Mode 1's ordinary 8x8, 512-wide backgrounds. Offset-per-tile, hires,
+  // mosaic and Mode 7 continue to use their existing address calculations.
+  for(uint bg = 0; bg < 2; bg++) {
+    auto background = [&](Line& line) -> IO::Background& { return bg ? line.io.bg2 : line.io.bg1; };
+    uint n = 0;
+    while(n < count) {
+      auto& line = ppu.lines[start + n];
+      auto& b = background(line);
+      if(line.io.bgMode != 1 || b.tileSize || b.screenSize != 1 || b.mosaicEnable
+      || (!b.aboveEnable && !b.belowEnable)) { n++; continue; }
+      uint end = n + 1;
+      while(end < count) {
+        auto& next = ppu.lines[start + end];
+        auto& nb = background(next);
+        if(next.io.bgMode != 1 || nb.tileSize || nb.screenSize != 1 || nb.mosaicEnable
+        || nb.screenAddress != b.screenAddress || nb.tiledataAddress != b.tiledataAddress
+        || nb.voffset != b.voffset || nb.aboveEnable != b.aboveEnable || nb.belowEnable != b.belowEnable) break;
+        end++;
+      }
+      uint first = ((line.y + b.voffset) & 255) >> 3;
+      uint last = ((ppu.lines[start + end - 1].y + b.voffset) & 255) >> 3;
+      //a band straddling the tilemap's own vertical wrap is not inside one
+      //panorama window, so it keeps ordinary hardware wrapping
+      if(last >= first) {
+        auto grid = HdToolkit::panoramaGrid(ppu.vram, b.screenAddress, first, last);
+        for(uint i = n; i < end; i++) {
+          ppu.lines[start + i].panorama[bg] = grid;
+          ppu.lines[start + i].panoramaFirstRow[bg] = first;
+        }
+      }
+      n = end;
+    }
+  }
+}
+
 auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> void {
   if(!self.aboveEnable && !self.belowEnable) return;
   if(self.tileMode == TileMode::Mode7) return renderMode7(self, source);
   if(self.tileMode == TileMode::Inactive) return;
 
-  bool windowAbove[256];
-  bool windowBelow[256];
-  renderWindow(self.window, self.window.aboveEnable, windowAbove);
-  renderWindow(self.window, self.window.belowEnable, windowBelow);
+  auto wsDec = HdToolkit::decideWsBg(
+    ppu.wsbg(source), (int)this->y, self.tileSize, self.hoffset, self.voffset,
+    (int)ppu.widescreen(), ppu.wsOverride()
+  );
+  if(wsDec.disable) return;
+  int ws = wsDec.extra;
+  bool autoCrop = wsDec.autoCrop;
+  int globalWs = (int)ppu.widescreen();
+
+  bool windowAbove[448];
+  bool windowBelow[448];
+  renderWindow(self.window, self.window.aboveEnable, windowAbove, (uint)globalWs);
+  renderWindow(self.window, self.window.belowEnable, windowBelow, (uint)globalWs);
 
   bool hires = io.bgMode == 5 || io.bgMode == 6;
   bool offsetPerTileMode = io.bgMode == 2 || io.bgMode == 4 || io.bgMode == 6;
@@ -41,11 +97,26 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
   uint mosaicPalette = 0;
   uint8 mosaicPriority = 0;
   uint32 mosaicColor = 0;
+  bool lastCropped = false;
 
-  int x = 0 - (hscroll & 7);
-  while(x < width) {
-    uint hoffset = x + hscroll;
-    uint voffset = y + vscroll;
+  //Widescreen panorama continuation. F-Zero and games like it store the horizon
+  //as 256-pixel windows on separate tilemap row bands, with the tilemap's second
+  //32x32 half holding, at the same rows, the window 256 pixels further on.
+  //Ordinary hardware wrapping is therefore already right across the whole of
+  //0..hmask; only a fetch that leaves the map has to be redirected, and where it
+  //lands is not tile-aligned, so the walk is split by column rather than decided
+  //once per 8-pixel tile.
+  auto grid = panorama[source];
+  uint panoramaFirst = panoramaFirstRow[source];
+  int scroll = (int)(hscroll & hmask);
+  int spanLow = -ws, spanHigh = width + ws;
+
+  auto renderSpan = [&](int from, int to, int hAdjust, int vAdjust) {
+  if(from >= to) return;
+  int x = from - ((from + (int)hscroll) & 7);
+  while(x < to) {
+    uint hoffset = x + hscroll + hAdjust;
+    uint voffset = y + vscroll + vAdjust;
     if(offsetPerTileMode) {
       uint validBit = 0x2000 << source;
       uint offsetX = x + (hscroll & 7);
@@ -94,7 +165,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
     data |= (uint64)ppu.vram[address + 24] << 48;
 
     for(uint tileX = 0; tileX < 8; tileX++, x++) {
-      if(x & width) continue;  //x < 0 || x >= width
+      if(x < from || x >= to) continue;
       if(--mosaicCounter == 0) {
         uint color, shift = mirrorX ? tileX : 7 - tileX;
       /*if(self.tileMode >= TileMode::BPP2)*/ {
@@ -121,25 +192,61 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
           mosaicColor = decode(cgram[paletteIndex + mosaicPalette]);
         }
       }
-      if(!mosaicPalette) continue;
+      if(!mosaicPalette) { lastCropped = false; continue; }
+      if(autoCrop && (lastCropped || x < 8 || x > 255 - 8) && mosaicColor == 0) {
+        lastCropped = true;
+        continue;
+      }
+      lastCropped = false;
+
+      int wx = (int)ppu.winXad(x) + globalWs;
+      if(wx < 0 || wx >= 256 + 2 * globalWs) continue;
 
       if(!hires) {
-        if(self.aboveEnable && !windowAbove[x]) plotAbove(x, source, mosaicPriority, mosaicColor);
-        if(self.belowEnable && !windowBelow[x]) plotBelow(x, source, mosaicPriority, mosaicColor);
+        if(self.aboveEnable && !windowAbove[wx]) plotAbove(x, source, mosaicPriority, mosaicColor);
+        if(self.belowEnable && !windowBelow[wx]) plotBelow(x, source, mosaicPriority, mosaicColor);
       } else {
         uint X = x >> 1;
+        int Wx = (int)ppu.winXad((int)X) + globalWs;
+        if(Wx < 0 || Wx >= 256 + 2 * globalWs) continue;
         if(!ppu.hd()) {
           if(x & 1) {
-            if(self.aboveEnable && !windowAbove[X]) plotAbove(X, source, mosaicPriority, mosaicColor);
+            if(self.aboveEnable && !windowAbove[Wx]) plotAbove(X, source, mosaicPriority, mosaicColor);
           } else {
-            if(self.belowEnable && !windowBelow[X]) plotBelow(X, source, mosaicPriority, mosaicColor);
+            if(self.belowEnable && !windowBelow[Wx]) plotBelow(X, source, mosaicPriority, mosaicColor);
           }
         } else {
-          if(self.aboveEnable && !windowAbove[X]) plotHD(above, X, source, mosaicPriority, mosaicColor, true, x & 1);
-          if(self.belowEnable && !windowBelow[X]) plotHD(below, X, source, mosaicPriority, mosaicColor, true, x & 1);
+          if(self.aboveEnable && !windowAbove[Wx]) plotHD(above, X, source, mosaicPriority, mosaicColor, true, x & 1);
+          if(self.belowEnable && !windowBelow[Wx]) plotHD(below, X, source, mosaicPriority, mosaicColor, true, x & 1);
         }
       }
     }
+  }
+  };
+
+  //no panorama: one uncorrected walk, exactly as before
+  if(!grid.count) return renderSpan(spanLow, spanHigh, 0, 0);
+
+  //otherwise group the columns into runs that share an adjustment. Columns
+  //inside the frame keep the hardware's own wrapping, whatever it draws.
+  auto adjust = [&](int x, int& hAdjust, int& vAdjust) {
+    hAdjust = vAdjust = 0;
+    if(x >= 0 && x < width) return;
+    HdToolkit::panoramaAdjust(grid, panoramaFirst, x + scroll, hAdjust, vAdjust);
+  };
+  int from = spanLow;
+  while(from < spanHigh) {
+    int hAdjust, vAdjust;
+    adjust(from, hAdjust, vAdjust);
+    int to = from + 1;
+    while(to < spanHigh) {
+      int h, v;
+      adjust(to, h, v);
+      if(h != hAdjust || v != vAdjust) break;
+      to++;
+    }
+    renderSpan(from, to, hAdjust, vAdjust);
+    from = to;
   }
 }
 

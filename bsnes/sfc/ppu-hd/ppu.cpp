@@ -1,3 +1,4 @@
+#include <emulator/hdtrace.hpp>
 #include <sfc/sfc.hpp>
 #include <cmath>
 
@@ -49,10 +50,32 @@ auto PPU::hdTrueColor() const -> bool { return configuration.hacks.ppu.hdTrueCol
 auto PPU::deinterlace() const -> bool { return configuration.hacks.ppu.hdDeinterlace; }
 auto PPU::renderCycle() const -> uint { return configuration.hacks.ppu.renderCycle; }
 auto PPU::noVRAMBlocking() const -> bool { return configuration.hacks.ppu.noVRAMBlocking; }
+auto PPU::widescreenRaw() const -> uint {
+  if(configuration.hacks.ppu.hdMode7.wsMode == 0) return 0;
+  return configuration.hacks.ppu.hdMode7.widescreen;
+}
+auto PPU::widescreen() const -> uint { return wsExt; }
+auto PPU::lineWidth() const -> uint { return 256 + 2 * widescreen(); }
+auto PPU::winXad(int x) const -> uint {
+  if(x >= 0 && x < 256) return (uint)x;
+  if(configuration.hacks.ppu.hdMode7.igwin) return configuration.hacks.ppu.hdMode7.igwinx & 255;
+  if(x < 0) return 0;
+  return 255;
+}
+auto PPU::wsOverride() const -> bool {
+  return mode7LineGroups.count < 1 && configuration.hacks.ppu.hdMode7.wsMode == 1;
+}
+auto PPU::wsbg(uint bg) const -> uint {
+  if(bg == Source::BG1) return configuration.hacks.ppu.hdMode7.wsbg1;
+  if(bg == Source::BG2) return configuration.hacks.ppu.hdMode7.wsbg2;
+  if(bg == Source::BG3) return configuration.hacks.ppu.hdMode7.wsbg3;
+  if(bg == Source::BG4) return configuration.hacks.ppu.hdMode7.wsbg4;
+  return 16;
+}
 #define ppu ppuhd
 
 PPU::PPU() {
-  output = new uint32_t[2304 * 2160]();
+  output = new uint32_t[256 * 61440]();
 
   for(uint l : range(16)) {
     lightTable[l] = new uint32_t[32768];
@@ -123,8 +146,9 @@ auto PPU::scanline() -> void {
       //when disabling overscan, clear the overscan area that won't be rendered to:
       for(uint y = 1; y <= 240; y++) {
         if(y >= 8 && y <= 231) continue;
-        auto output = ppu.output + y * 1024;
-        memory::fill<uint32>(output, 1024);
+        uint stride = (!hd() && widescreen()) ? lineWidth() : (!hd() ? 1024 : lineWidth() * hdScale() * hdScale());
+        auto output = ppu.output + y * stride;
+        memory::fill<uint32>(output, stride);
       }
     }
 
@@ -161,13 +185,18 @@ auto PPU::refresh() -> void {
   if(system.frameCounter == 0 && !system.runAhead) {
     auto output = this->output;
     uint pitch, width, height;
-    if(!hd()) {
+    if(gpuSupersample() && widescreen()) {
+      pitch  = lineWidth();
+      width  = lineWidth();
+      height = 240;
+    } else if(!hd()) {
       pitch  = 512 << !interlace();
       width  = 256 << hires();
       height = 240 << interlace();
     } else {
-      pitch  = 256 * hdScale();
-      width  = 256 * hdScale();
+      uint lw = lineWidth();
+      pitch  = lw * hdScale();
+      width  = lw * hdScale();
       height = 240 * hdScale();
     }
 
@@ -176,13 +205,51 @@ auto PPU::refresh() -> void {
     if(!latch.overscan && pitch != frame.pitch && width != frame.width && height != frame.height) {
       for(uint y : range(240)) {
         if(y >= 8 && y <= 230) continue;  //these scanlines are always rendered.
-        auto output = this->output + (!hd() ? (y * 1024 + (interlace() && field() ? 512 : 0)) : (y * 256 * hdScale() * hdScale()));
-        auto width = (!hd() ? (!hires() ? 256 : 512) : (256 * hdScale() * hdScale()));
+        auto output = this->output + (!hd()
+          ? (widescreen() ? y * lineWidth() : (y * 1024 + (interlace() && field() ? 512 : 0)))
+          : (y * lineWidth() * hdScale() * hdScale()));
+        auto width = (!hd()
+          ? (widescreen() ? lineWidth() : (!hires() ? 256 : 512))
+          : (lineWidth() * hdScale() * hdScale()));
         memory::fill<uint32>(output, width);
       }
     }
 
+    if(auto dump = getenv("BSNES_DUMP_GPU")) {
+      static bool once = false;
+      if(!once) {
+        once = true;
+        if(auto fp = fopen("/tmp/bsnes-hd-gpu.log", "a")) {
+          fprintf(fp, "refresh pitch=%u width=%u height=%u hd=%d gpu=%d ws=%u lw=%u scale=%u\n",
+            pitch, width, height, (int)hd(), (int)gpuSupersample(), widescreen(), lineWidth(), hdScale());
+          fclose(fp);
+        }
+        (void)dump;
+      }
+    }
+
     platform->videoFrame(output, pitch * sizeof(uint32), width, height, hd() ? hdScale() : 1);
+
+    //BSNES_FRAME_DIR + BSNES_FRAME_AT: write the chosen frames as PPM so the
+    //seam can be located to the pixel.
+    if(HdTrace::wantFrameDump(HdTrace::frame())) {
+      char path[512];
+      snprintf(path, sizeof(path), "%s/frame-%06u.ppm", getenv("BSNES_FRAME_DIR"), HdTrace::frame());
+      if(auto fp = fopen(path, "wb")) {
+        fprintf(fp, "P6\n%u %u\n255\n", width, height);
+        auto src = output;
+        for(uint row : range(height)) {
+          for(uint col : range(width)) {
+            uint32 c = src[col];
+            fputc(c >> 16 & 255, fp);
+            fputc(c >>  8 & 255, fp);
+            fputc(c >>  0 & 255, fp);
+          }
+          src += pitch;
+        }
+        fclose(fp);
+      }
+    }
 
     if(auto dump = getenv("BSNES_DUMP_FRAME")) {
       static uint dumped = 0;

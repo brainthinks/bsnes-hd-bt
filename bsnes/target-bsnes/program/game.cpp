@@ -24,6 +24,8 @@ auto Program::load() -> void {
   emulator->configure("Hacks/PPU/HDMode7/SsFactor", settings.emulator.hack.ppu.hdMode7.ssFactor);
   emulator->configure("Hacks/PPU/HDMode7/Mosaic", settings.emulator.hack.ppu.hdMode7.mosaic);
   emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", settings.emulator.hack.ppu.hdMode7.gpuSupersample);
+  emulator->configure("Hacks/PPU/HDMode7/WsMode", settings.emulator.hack.ppu.hdMode7.wsMode);
+  emulator->configure("Hacks/PPU/HDMode7/Widescreen", settings.emulator.hack.ppu.hdMode7.widescreen);
   emulator->configure("Hacks/DSP/Fast", settings.emulator.hack.dsp.fast);
   emulator->configure("Hacks/DSP/Cubic", settings.emulator.hack.dsp.cubic);
   emulator->configure("Hacks/DSP/EchoShadow", settings.emulator.hack.dsp.echoShadow);

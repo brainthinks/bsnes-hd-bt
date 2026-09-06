@@ -36,6 +36,9 @@ Accurate and Fast stay hardware-accurate and must not change. HD is opt-in.
    **bsnes fullscreen** (`--fullscreen`, real viewport) using
    `.grok/skills/hd-ppu-visual/SKILL.md`. Do not ask the user to eyeball
    every attempt. Maximize and a fake `DUMP_W/H` FBO are not fullscreen.
+   Widescreen, pitch, and `viewportSize` changes use that same dump loop:
+   rebuild, capture F-Zero Slot 2, open the PNG, then fix. Code review is
+   not a pass.
 4. **All games** — F-Zero is not enough. Super Mario Kart, Castlevania IV,
    Contra III (EXTBG), Pilotwings, and the rest of the game table in
    `docs/hd-ppu-next.md` must keep their Mode 7 (and non-Mode-7 HD) features.

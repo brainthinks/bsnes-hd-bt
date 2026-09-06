@@ -138,6 +138,12 @@ auto Settings::process(bool load) -> void {
   bind(natural, "Emulator/Hack/PPU/HDMode7/SsFactor",    emulator.hack.ppu.hdMode7.ssFactor);
   bind(boolean, "Emulator/Hack/PPU/HDMode7/Mosaic",      emulator.hack.ppu.hdMode7.mosaic);
   bind(boolean, "Emulator/Hack/PPU/HDMode7/GpuSupersample", emulator.hack.ppu.hdMode7.gpuSupersample);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/WsMode", emulator.hack.ppu.hdMode7.wsMode);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/Widescreen", emulator.hack.ppu.hdMode7.widescreen);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/Wsbg1", emulator.hack.ppu.hdMode7.wsbg1);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/Wsbg2", emulator.hack.ppu.hdMode7.wsbg2);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/Wsbg3", emulator.hack.ppu.hdMode7.wsbg3);
+  bind(natural, "Emulator/Hack/PPU/HDMode7/Wsbg4", emulator.hack.ppu.hdMode7.wsbg4);
   if(load && !operator[]("Emulator/Hack/PPU/HDMode7/Scale") && operator[]("Emulator/Hack/PPU/Mode7/Scale")) {
     emulator.hack.ppu.hdMode7.scale = emulator.hack.ppu.mode7.scale;
   }

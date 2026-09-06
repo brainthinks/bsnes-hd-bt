@@ -123,6 +123,9 @@ struct Settings : Markup::Node {
           uint ssFactor = 1;
           bool mosaic = true;
           bool gpuSupersample = false;
+          uint wsMode = 0;
+          uint widescreen = 1609;
+          uint wsbg1 = 16, wsbg2 = 16, wsbg3 = 16, wsbg4 = 16;
         } mode7, hdMode7{5, true, true, 4, false, true};
       } ppu;
       struct DSP {
@@ -392,6 +395,20 @@ public:
     CheckLabel mode7Perspective{&mode7Layout, Size{0, 0}};
     CheckLabel mode7Supersample{&mode7Layout, Size{0, 0}};
     CheckLabel mode7Mosaic{&mode7Layout, Size{0, 0}};
+  HorizontalLayout mode7WsLayout{this, Size{~0, 0}};
+    Label mode7WsModeLabel{&mode7WsLayout, Size{0, 0}};
+    ComboButton mode7WsMode{&mode7WsLayout, Size{0, 0}};
+    Label mode7WsAspectLabel{&mode7WsLayout, Size{0, 0}};
+    ComboButton mode7WsAspect{&mode7WsLayout, Size{0, 0}};
+  HorizontalLayout mode7WsBgLayout{this, Size{~0, 0}};
+    Label mode7WsBg1Label{&mode7WsBgLayout, Size{0, 0}};
+    ComboButton mode7WsBg1{&mode7WsBgLayout, Size{0, 0}};
+    Label mode7WsBg2Label{&mode7WsBgLayout, Size{0, 0}};
+    ComboButton mode7WsBg2{&mode7WsBgLayout, Size{0, 0}};
+    Label mode7WsBg3Label{&mode7WsBgLayout, Size{0, 0}};
+    ComboButton mode7WsBg3{&mode7WsBgLayout, Size{0, 0}};
+    Label mode7WsBg4Label{&mode7WsBgLayout, Size{0, 0}};
+    ComboButton mode7WsBg4{&mode7WsBgLayout, Size{0, 0}};
   //
   Canvas dspSpacer{this, Size{~0, 1}};
   Label dspLabel{this, Size{~0, 0}, 2};

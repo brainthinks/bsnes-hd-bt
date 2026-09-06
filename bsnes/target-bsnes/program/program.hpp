@@ -147,6 +147,7 @@ struct Program : Lock, Emulator::Platform {
   //viewport.cpp
   auto viewportSize(uint& width, uint& height, uint scale) -> void;
   auto viewportRefresh() -> void;
+  auto overscanCropRows(uint width, uint scale) const -> uint;
 
 public:
   struct Game {

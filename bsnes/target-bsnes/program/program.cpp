@@ -120,6 +120,9 @@ auto Program::main() -> void {
 
   rewindRun();
 
+  HdTrace::advanceFrame();
+  if(auto limit = HdTrace::quitAfter(); limit && HdTrace::frame() > limit) return program.quit();
+
   if(!settings.emulator.runAhead.frames || fastForwarding || rewinding) {
     emulator->run();
   } else {

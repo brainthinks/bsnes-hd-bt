@@ -8,6 +8,7 @@
 // that 1× and 8× SS differ and that luma 0 does not black the image.
 
 #include "gpu-mode7.hpp"
+#include "emulator/hdtoolkit.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -261,6 +262,107 @@ static auto testPacking() -> void {
   CHECK(!HDMode7::lineIsValid(1.0f));
   CHECK(HDMode7::packLineValid(false) < 2.5f);
   CHECK(HDMode7::packLineValid(true) > 2.5f);
+
+  CHECK(HdToolkit::determineWsExt(0, false, false) == 0);
+  CHECK(HdToolkit::determineWsExt(64, false, false) == 64);
+  CHECK(HdToolkit::determineWsExt(1609, false, false) == 64);
+  CHECK(HdToolkit::determineWsExt(1609, false, true) == 64);
+  CHECK(HdToolkit::determineWsExt(403, false, false) == 16);
+
+  auto hud = HdToolkit::decideWsBg(16, 20, 0, 0, 0, 40, false);
+  CHECK(hud.extra == 0);
+  CHECK(!hud.disable);
+  auto skyOn = HdToolkit::decideWsBg(1, 20, 0, 0, 0, 40, false);
+  CHECK(skyOn.extra == 40);
+  auto off = HdToolkit::decideWsBg(0, 20, 0, 0, 0, 40, false);
+  CHECK(off.extra == 0);
+  auto scrolled = HdToolkit::decideWsBg(16, 20, 0, 8, 0, 40, false);
+  CHECK(scrolled.extra == 40);
+  auto below80 = HdToolkit::decideWsBg(5, 100, 0, 0, 0, 40, false);
+  CHECK(below80.extra == 40);
+  auto above80 = HdToolkit::decideWsBg(5, 20, 0, 0, 0, 40, false);
+  CHECK(above80.extra == 0);
+  auto crop = HdToolkit::decideWsBg(12, 20, 0, 0, 0, 40, false);
+  CHECK(crop.extra == -8);
+  auto disabled = HdToolkit::decideWsBg(14, 20, 0, 0, 0, 40, false);
+  CHECK(disabled.disable);
+  auto overrideOff = HdToolkit::decideWsBg(1, 20, 0, 0, 0, 40, true);
+  CHECK(overrideOff.extra == 0);
+
+  // A panorama stored as three 256-pixel windows of seven tile rows each. The
+  // second tilemap half holds, at the same rows, the window 256 pixels on, so
+  // the loop closes after 768 pixels. Distinct column data keeps matches from
+  // being an artefact of an empty sky.
+  unsigned short panorama[32768] = {};
+  constexpr unsigned map = 0x7800;
+  auto fillHalf = [&](unsigned first, unsigned half, unsigned scene) {
+    for(unsigned y = 0; y < 7; y++) for(unsigned x = 0; x < 32; x++) {
+      panorama[map + half * 1024 + (first + y) * 32 + x] = 1 + scene * 256 + y * 32 + x;
+    }
+  };
+  auto build = [&](unsigned windows, unsigned base) {
+    for(unsigned n = 0; n < 32768; n++) panorama[n] = 0;
+    for(unsigned band = 0; band < windows; band++) {
+      fillHalf(base + band * 7, 0, band);
+      fillHalf(base + band * 7, 1, (band + 1) % windows);
+    }
+  };
+
+  build(3, 11);
+  auto grid = HdToolkit::panoramaGrid(panorama, map, 11, 17);
+  CHECK(grid.count == 3);
+  CHECK(grid.base == 11);
+  CHECK(grid.height == 7);
+  CHECK(grid.lastSpan == 256);
+  CHECK(grid.length() == 768);
+
+  // A column one pixel left of the picture belongs to the window before this
+  // one, which for the first window is the last: two windows further down.
+  int h = 0, v = 0;
+  CHECK(HdToolkit::panoramaAdjust(grid, 11, -1, h, v));
+  CHECK(h == 256 && v == 2 * 7 * 8);
+  CHECK(HdToolkit::panoramaAdjust(grid, 18, -1, h, v));
+  CHECK(h == 256 && v == -7 * 8);
+  // 512 pixels on is two windows on, wrapping back to the first.
+  CHECK(HdToolkit::panoramaAdjust(grid, 25, 512, h, v));
+  CHECK(h == -512 && v == -7 * 8);
+  // Inside 0..255 the answer is the window itself: no adjustment at all.
+  CHECK(HdToolkit::panoramaAdjust(grid, 11, 100, h, v));
+  CHECK(h == 0 && v == 0);
+
+  // A loop that is not a whole number of windows: F-Zero's nearest layer closes
+  // after three and a half, so the last window's second half repeats the first
+  // window's beginning and the step back from the first window is 128 pixels.
+  // Build it from the panorama itself so both halves stay consistent.
+  {
+    for(unsigned n = 0; n < 32768; n++) panorama[n] = 0;
+    constexpr unsigned tiles = 112;  //896 pixels
+    for(unsigned window = 0; window < 4; window++) {
+      for(unsigned y = 0; y < 7; y++) for(unsigned x = 0; x < 32; x++) {
+        unsigned row = 4 + window * 7 + y;
+        panorama[map + row * 32 + x] = 1 + y * 256 + (window * 32 + x) % tiles;
+        panorama[map + 1024 + row * 32 + x] = 1 + y * 256 + (window * 32 + 32 + x) % tiles;
+      }
+    }
+  }
+  auto shortLoop = HdToolkit::panoramaGrid(panorama, map, 4, 10);
+  CHECK(shortLoop.base == 4);
+  CHECK(shortLoop.count == 4);
+  CHECK(shortLoop.lastSpan == 128);
+  CHECK(shortLoop.length() == 896);
+  CHECK(HdToolkit::panoramaAdjust(shortLoop, 4, -1, h, v));
+  CHECK(h == 128 && v == 3 * 7 * 8);
+  CHECK(HdToolkit::panoramaAdjust(shortLoop, 11, -1, h, v));
+  CHECK(h == 256 && v == -7 * 8);
+
+  // An ordinary background is not a panorama.
+  unsigned short plain[32768] = {};
+  for(unsigned n = 0; n < 2048; n++) plain[map + n] = 1 + n;
+  CHECK(HdToolkit::panoramaGrid(plain, map, 11, 17).count == 0);
+  CHECK(!HdToolkit::panoramaAdjust(HdToolkit::panoramaGrid(plain, map, 11, 17), 11, -1, h, v));
+  // A band straddling the tilemap's vertical wrap is rejected.
+  CHECK(HdToolkit::panoramaGrid(panorama, map, 30, 3).count == 0);
+
 }
 
 static auto testShaderSource(const std::string& path) -> void {
@@ -292,6 +394,9 @@ static auto testShaderSource(const std::string& path) -> void {
   CHECK(frag.find("1.0 + 2.0 * taper") == std::string::npos);
   CHECK(frag.find("j < 16") == std::string::npos);
   CHECK(frag.find("int n = ss") != std::string::npos);
+  CHECK(frag.find("snesW") != std::string::npos);
+  CHECK(frag.find("texCoord.x * snesW - ws") != std::string::npos);
+  CHECK(frag.find("snes.x < 0.0 || snes.x >= 256.0") != std::string::npos);
   CHECK(frag.find("luma < 1.0 / 15.0") != std::string::npos);
   // SMK floor went black when a window bit zeroed the texel.
   CHECK(frag.find("if(!aboveWin) rgb") == std::string::npos);
@@ -689,11 +794,21 @@ static auto testMode7Render(const std::string& frag) -> void {
 }
 #endif
 
+static auto testViewportSource() -> void {
+  auto vp = readFile("../../bsnes/target-bsnes/program/viewport.cpp");
+  CHECK(!vp.empty());
+  // 4:3 bars on a 16:9 dump: viewportSize ignored the framebuffer width.
+  CHECK(vp.find("width / scale") != std::string::npos);
+  CHECK(vp.find("uint videoWidth = 256 *") == std::string::npos);
+  CHECK(vp.find("snesW <= 256") != std::string::npos);
+}
+
 auto main(int argc, char** argv) -> int {
   const char* shaderPath = argc > 1 ? argv[1] : "../../ruby/video/opengl/shaders.hpp";
   testPacking();
   testColorRamps();
   testShaderSource(shaderPath);
+  testViewportSource();
 #ifdef HD_PPU_GL
   auto file = readFile(shaderPath);
   auto frag = extractRString(file, "OpenGLMode7FragmentShader");

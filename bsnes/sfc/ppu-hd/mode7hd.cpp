@@ -92,7 +92,7 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
 
   uint* sampTmp = nullptr;
   if(sampScale > 1) {
-    sampTmp = new uint[256 * 4 * outScale]();
+    sampTmp = new uint[(256 + 2 * ppu.widescreen()) * 4 * outScale]();
   }
 
   Pixel pixel;
@@ -191,9 +191,12 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
     float originY = (c * ht) + (d * vty) + (vcenter << 8);
 
     int pixelXp = INT_MIN;
-    for(int x : range(256)) {
-      bool doAbove = self.aboveEnable && !windowAbove[x];
-      bool doBelow = self.belowEnable && !windowBelow[x];
+    int ws = (int)ppu.widescreen();
+    if(ppu.wsOverride()) ws = 0;
+    for(int x = -ws; x < 256 + ws; x++) {
+      uint wx = ppu.winXad(x);
+      bool doAbove = self.aboveEnable && !windowAbove[wx];
+      bool doBelow = self.belowEnable && !windowBelow[wx];
 
       for(int xs : range(scale)) {
         float xf = x + xs * 1.0 / scale - 0.5;
@@ -237,7 +240,7 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
           above++;
           below++;
         } else {
-          int p = (x * outScale + (xs / sampScale)) * 4;
+          int p = ((x + ws) * outScale + (xs / sampScale)) * 4;
           sampTmp[p + 0] += pixel.priority;
           sampTmp[p + 1] += pixel.color >> 16 & 255;
           sampTmp[p + 2] += pixel.color >>  8 & 255;

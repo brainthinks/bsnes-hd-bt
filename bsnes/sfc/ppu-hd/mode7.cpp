@@ -30,7 +30,9 @@ auto PPU::Line::renderMode7(PPU::IO::Background& self, uint8 source) -> void {
   renderWindow(self.window, self.window.aboveEnable, windowAbove);
   renderWindow(self.window, self.window.belowEnable, windowBelow);
 
-  for(int X : range(256)) {
+  int ws = (int)ppu.widescreen();
+  if(ppu.wsOverride()) ws = 0;
+  for(int X = -ws; X < 256 + ws; X++) {
     int x = !io.mode7.hflip ? X : 255 - X;
     int pixelX = originX + a * x >> 8;
     int pixelY = originY + c * x >> 8;
@@ -62,7 +64,8 @@ auto PPU::Line::renderMode7(PPU::IO::Background& self, uint8 source) -> void {
     }
     if(!mosaicPalette) continue;
 
-    if(self.aboveEnable && !windowAbove[X]) plotAbove(X, source, mosaicPriority, mosaicColor);
-    if(self.belowEnable && !windowBelow[X]) plotBelow(X, source, mosaicPriority, mosaicColor);
+    uint wx = ppu.winXad(X);
+    if(self.aboveEnable && !windowAbove[wx]) plotAbove(X, source, mosaicPriority, mosaicColor);
+    if(self.belowEnable && !windowBelow[wx]) plotBelow(X, source, mosaicPriority, mosaicColor);
   }
 }

@@ -1,0 +1,3135 @@
+diff --git a/.grok/skills/accuracy-first/SKILL.md b/.grok/skills/accuracy-first/SKILL.md
+new file mode 100644
+index 000000000..e202eca2a
+--- /dev/null
++++ b/.grok/skills/accuracy-first/SKILL.md
+@@ -0,0 +1,37 @@
++---
++name: accuracy-first
++description: >
++  Project rule for this bsnes-hd fork: hardware-accurate SNES emulation is the core
++  competency and always takes precedence. Modern layers (32-bit/true color, widescreen,
++  HD smoothing, HD windowing, extra Mode 7 options) are optional and must not replace
++  the 15-bit accurate path. Use when implementing or planning PPU, color, videoFrame,
++  blending, widescreen, true color, 32-bit color, defaults, or accuracy tradeoffs.
++  Use when the user runs /accuracy-first.
++---
++
++# Accuracy first
++
++bsnes's value is hardware accuracy. This fork may add a modern layer on top. If an enhancement costs accuracy, it is optional. The accurate workflow must always exist, remain correct, and take precedence.
++
++## Hardware fact
++
++The SNES PPU does not have 32-bit color. CGRAM is 15-bit RGB (5-5-5, 32768 colors). Color math (add/sub/half) and master brightness operate on those 5-bit channels. Official `ppu-fast` matches that: `Pixel.color` is `uint16`, `blend()` uses the 15-bit add/sub algorithm, `lightTable` and `videoFrame` stay 16-bit. That is the accurate path, not a missing feature.
++
++DerKoun hd converted to 24-bit (`uint32`) early so averaging and smoothing had extra precision. That changes color math. Official rejected a whole-pipeline rewrite for that reason.
++
++## Rules
++
++1. **Accurate path is the product default.** Settings, code paths, and frame format match official/hardware behavior unless the user has opted into an enhancement.
++2. **Enhancements sit beside the accurate path, never instead of it.** Gate with a setting. Off = official behavior, including color format and color math. Do not delete, `#if`-out, or "simplify away" the 15-bit `blend()` / `uint16` framebuffer.
++3. **Do not make a modern layer a required foundation.** 32-bit color is not a prerequisite for widescreen. If an effect needs extra precision, that effect is optional too. Do not convert the whole PPU to `uint32` as the only compile-time pipeline.
++4. **Do not silently change precision.** Color math, blending, dither, brightness, and output depth stay hardware-accurate on the default path.
++5. **Pattern:** official HD Mode 7 (`Scale: 1` = native 240p; higher scales optional). Follow that for true color, widescreen, smoothing, and windowing.
++
++## When implementing color or video
++
++- Keep official `uint16` `Pixel.color`, `lightTable`, `output`, and `Platform::videoFrame(const uint16*, ...)` working.
++- If 24-bit conversion exists, it is behind a setting; when off, 15-bit `blend()` still runs.
++- Widescreen, `bgGrad`, HD windowing, and SSAA must not force 32-bit on. Effects that only work in 24-bit stay disabled on the accurate path.
++- Prefer a runtime branch over a second forked PPU, but two complete paths beat one inaccurate path.
++
++Check this skill before changing PPU pixel types, `videoFrame`, blending, or enhancement defaults.
+diff --git a/STRATEGY.md b/STRATEGY.md
+new file mode 100644
+index 000000000..3db574020
+--- /dev/null
++++ b/STRATEGY.md
+@@ -0,0 +1,104 @@
++# bsnes-hd fork strategy
++
++**Status**
++
++- Phase 0 complete (2026-08-23)
++  - `legacy-hd` = DerKoun hd (`fc26b25ea`)
++  - `master` = official bsnes + Linux viewport fix
++- Phase 1 in progress on branch `phase-1-widescreen`
++  - hd `ppu-fast` overlay, widescreen config/UI, 32-bit video path
++  - builds standalone; not committed yet
++- Next: verify SMW / F-Zero / HyperZone / FF3, then commit
++
++Do **not** merge official bsnes into the current hd git history. Port hd’s remaining features onto current official `master` instead.
++
++That is the whole strategy. The “five-year merge” is a much smaller PPU job than it looks, and the maintainer’s objections map cleanly onto what should stay in the fork vs what is worth offering upstream later.
++
++## Why not `git merge`
++
++DerKoun’s repo is **snapshot imports** (`bsnes107r1`, `beta10 (bsnes114)`, …), not a history-preserving fork. There is no merge-base with `bsnes-emu/bsnes`. A real merge is not possible.
++
++What *is* possible is a tree-level port, and the numbers are good:
++
++| | Official `ppu-fast` since v114 (2020) | hd’s `ppu-fast` vs that same v114 |
++|---|---|---|
++| Size | **~80 lines** (mosaic, offset-per-tile, a few serialization bits) | **~800 lines added / ~350 removed** |
++
++Five years of official work is almost entirely **outside** the HD PPU: SameBoy, coprocessor timing, Qt 6, GTK2 removal, ruby/audio driver order, docs. Official already has HD Mode 7, perspective correction, and supersampling — credited to DerKoun.
++
++So the hope that some concerns are already addressed is half right: Linux GUI and a pile of accuracy work *are* already on official master. Widescreen, true color, HD windowing, `.bso` overrides, and the game-fix pack are **not**.
++
++## What official already took vs what is still “hd”
++
++**Already in official bsnes**
++
++- HD Mode 7 scale
++- Perspective correction
++- Supersampling
++- Mosaic (simpler boolean, plus later higan mosaic fixes)
++
++**Still unique to the fork** (this is the overlay)
++
++- Widescreen (per-layer BG, sprites, markers, ignore-window, stretch-window)
++- True color (`Pixel.color` is `uint32` in hd, `uint16` in official)
++- Line-color smoothing (`bgGrad`)
++- HD windowing (`windRad`, prototype)
++- `.bso` setting overrides + `pack/` game fixes
++- Doubled VRAM for widescreen patches
++- Libretro target with all of the above options
++
++Widescreen is the product. True color is the invasive pipeline change. HD windowing is the piece even DerKoun called a prototype.
++
++## Maintainer concerns ([issue 16](https://github.com/bsnes-emu/bsnes/issues/16))
++
++Screwtapello (current maintainer) was not hostile. He was selective:
++
++1. **Same philosophy as byuu.** HD Mode 7 is “the SNES process at higher resolution,” so it went in. Widescreen invents columns the PPU never produced (sprites/HUDs break unless you ROM-hack). That is the least likely thing to be accepted upstream. It is also the reason this fork exists.
++2. **True color (15-bit → 24-bit moved early).** He did not want a whole-pipeline rewrite. He was open to *optional* smoothing, and wondered whether interpolating in 15-bit would be enough for some gradients.
++3. **HD windowing.** DerKoun said it looks bad on tops/bottoms and near-horizontal edges, and the code is naive averaging plus piled-on special cases. Screwtapello’s ask: a *simple* interpolation people can turn off, not a pile of tweaks. Do not offer the current code as a PR.
++4. **Struct-of-arrays / perf rewrites.** Only with measurements. No numbers, no merge.
++5. **GPU Mode 7.** Interesting, “radical replumbing.” He suggested dumping PPU state for a frame and prototyping in a standalone renderer first.
++
++That is a fork-first plan with optional, small upstream PRs later — not “get hd merged into bsnes.”
++
++## Recommended sequence
++
++### Phase 0 — new base (do this first)
++
++Keep current `master` as `legacy-hd` (reference + bisect). Make a new `master` at `official/master`. That remote is already added on the local clone.
++
++You immediately inherit Qt 6, no GTK2, SameBoy updates, coprocessor/PPU accuracy, and official’s Linux audio driver order (Pulse, ALSA, OpenAL — not SDL3). Then we find out which Linux/audio problems actually remain.
++
++### Phase 1 — widescreen overlay
++
++Port `hdtoolkit.hpp`, the extra Mode 7 config fields, and the `ppu-fast` widescreen hooks (`line.cpp` is the bulk of the +400-line delta). Goal: SMW / F-Zero / HyperZone / FF3 look like current hd. This is the hard visual work and the whole point of the fork.
++
++### Phase 2 — true color + line-color smoothing
++
++`uint16` → `uint32` `Pixel.color`, early conversion, `bgGrad`. Keep it behind a setting, default on to match hd. This is the change Screwtapello flinched at; isolating it is how we can talk to him later with a small diff instead of a rewrite.
++
++### Phase 3 — HD windowing, last, default off
++
++Port as-is for parity, labeled experimental. Rewrite only if we care; do not take it upstream in its current form.
++
++### Phase 4 — Linux / audio, after the rebase
++
++Official never grew an SDL3 audio path for standalone bsnes (`ruby` is still ALSA/Pulse/OpenAL). If the issues are “old hd on modern Linux,” Phase 0 may already fix them. If we want SDL3, that is new work (ares is the existence proof), not something we merge from official.
++
++### Phase 5 — performance, after we are on current master
++
++HD’s cost is mostly `(256 + 2×widescreen) × scale²` software pixels. GPU Mode 7 is the real fix and is a research project, which matches both DerKoun and Screwtapello. First: profile the rebased tree; do not optimize the 2020 snapshot.
++
++## What to say to the maintainer, when we have something
++
++Not “please merge the fork.” Three possible later PRs, in his language:
++
++- True-color line smoothing as an **optional** enhancement, with before/after shots and a note that 15-bit-only interpolation was considered.
++- Any actual accuracy/perf fix we find while porting (mosaic is already updated on his side — do not fight that).
++- Benchmarks if we try SoA or other PPU layout changes.
++
++Leave widescreen in this fork. Leave HD windowing out of PRs until it is a simple, optional interpolator.
++
++## Next step
++
++Phase 0 is done. Phase 1 is a surgical port of the ~800-line `ppu-fast` overlay onto current `master`, using `legacy-hd` as the reference.
+diff --git a/bsnes/emulator/hdtoolkit.hpp b/bsnes/emulator/hdtoolkit.hpp
+new file mode 100644
+index 000000000..5cd916bc9
+--- /dev/null
++++ b/bsnes/emulator/hdtoolkit.hpp
+@@ -0,0 +1,31 @@
++namespace HdToolkit {
++  static constexpr auto determineWsExt(int ws, bool overscan, bool aspectCorrection) -> int {
++    double val = ws;
++    if (ws > 200) {
++      int w = ws / 100;
++      int h = ws % 100;
++      val = overscan ? 224.0 : 216.0;
++      val *= w;
++      val /= h;
++      if (aspectCorrection) {
++        val *= 7;
++        val /= 8;
++      }
++      if (val <= 256) {
++        return 0;
++      }
++      val -= 256;
++      val /= 2;
++    }
++    val /= 8;
++    if (overscan || aspectCorrection) {
++      val += 0.5;
++    }
++    ws = (int)val;
++    if (ws <= 0) {
++      return 0;
++    }
++    ws *= 8;
++    return ws;
++  }
++}
+diff --git a/bsnes/emulator/platform.hpp b/bsnes/emulator/platform.hpp
+index 8eae0c0fa..bef869f5e 100644
+--- a/bsnes/emulator/platform.hpp
++++ b/bsnes/emulator/platform.hpp
+@@ -17,6 +17,7 @@ struct Platform {
+   virtual auto open(uint id, string name, vfs::file::mode mode, bool required = false) -> shared_pointer<vfs::file> { return {}; }
+   virtual auto load(uint id, string name, string type, vector<string> options = {}) -> Load { return {}; }
+   virtual auto videoFrame(const uint16* data, uint pitch, uint width, uint height, uint scale) -> void {}
++  virtual auto videoFrame(const uint32* data, uint pitch, uint width, uint height, uint scale) -> void {}
+   virtual auto audioFrame(const double* samples, uint channels) -> void {}
+   virtual auto inputPoll(uint port, uint device, uint input) -> int16 { return 0; }
+   virtual auto inputRumble(uint port, uint device, uint input, bool enable) -> void {}
+diff --git a/bsnes/sfc/interface/configuration.cpp b/bsnes/sfc/interface/configuration.cpp
+index 769b8b0c4..930a8f1a6 100644
+--- a/bsnes/sfc/interface/configuration.cpp
++++ b/bsnes/sfc/interface/configuration.cpp
+@@ -14,22 +14,45 @@ auto Configuration::process(Markup::Node document, bool load) -> void {
+   bind(natural, "System/PPU2/Version", system.ppu2.version);
+   bind(text,    "System/Serialization/Method", system.serialization.method);
+ 
++  bind(boolean, "Video/AspectCorrection", video.aspectCorrection);
++  bind(boolean, "Video/Overscan", video.overscan);
+   bind(boolean, "Video/BlurEmulation", video.blurEmulation);
+   bind(boolean, "Video/ColorEmulation", video.colorEmulation);
++  bind(natural, "Video/Saturation", video.saturation);
++  bind(natural, "Video/Gamma", video.gamma);
++  bind(natural, "Video/Luminance", video.luminance);
+ 
+   bind(boolean, "Hacks/Hotfixes", hacks.hotfixes);
+   bind(text,    "Hacks/Entropy", hacks.entropy);
+   bind(natural, "Hacks/CPU/Overclock", hacks.cpu.overclock);
+   bind(boolean, "Hacks/CPU/FastMath", hacks.cpu.fastMath);
++  bind(boolean, "Hacks/CPU/FastJoypadPolling", hacks.cpu.fastJoypadPolling);
+   bind(boolean, "Hacks/PPU/Fast", hacks.ppu.fast);
+   bind(boolean, "Hacks/PPU/Deinterlace", hacks.ppu.deinterlace);
+   bind(natural, "Hacks/PPU/RenderCycle", hacks.ppu.renderCycle);
+   bind(boolean, "Hacks/PPU/NoSpriteLimit", hacks.ppu.noSpriteLimit);
+   bind(boolean, "Hacks/PPU/NoVRAMBlocking", hacks.ppu.noVRAMBlocking);
+   bind(natural, "Hacks/PPU/Mode7/Scale", hacks.ppu.mode7.scale);
+-  bind(boolean, "Hacks/PPU/Mode7/Perspective", hacks.ppu.mode7.perspective);
++  bind(natural, "Hacks/PPU/Mode7/Perspective", hacks.ppu.mode7.perspective);
++  bind(natural, "Hacks/PPU/Mode7/Widescreen", hacks.ppu.mode7.widescreen);
++  bind(natural, "Hacks/PPU/Mode7/Wsbg1", hacks.ppu.mode7.wsbg1);
++  bind(natural, "Hacks/PPU/Mode7/Wsbg2", hacks.ppu.mode7.wsbg2);
++  bind(natural, "Hacks/PPU/Mode7/Wsbg3", hacks.ppu.mode7.wsbg3);
++  bind(natural, "Hacks/PPU/Mode7/Wsbg4", hacks.ppu.mode7.wsbg4);
++  bind(natural, "Hacks/PPU/Mode7/Wsobj", hacks.ppu.mode7.wsobj);
++  bind(natural, "Hacks/PPU/Mode7/Igwin", hacks.ppu.mode7.igwin);
++  bind(natural, "Hacks/PPU/Mode7/Igwinx", hacks.ppu.mode7.igwinx);
++  bind(boolean, "Hacks/PPU/Mode7/Strwin", hacks.ppu.mode7.strwin);
++  bind(natural, "Hacks/PPU/Mode7/VramExt", hacks.ppu.mode7.vramExt);
++  bind(natural, "Hacks/PPU/Mode7/BgGrad", hacks.ppu.mode7.bgGrad);
++  bind(natural, "Hacks/PPU/Mode7/WindRad", hacks.ppu.mode7.windRad);
++  bind(natural, "Hacks/PPU/Mode7/WsMode", hacks.ppu.mode7.wsMode);
++  bind(natural, "Hacks/PPU/Mode7/WsBgCol", hacks.ppu.mode7.wsBgCol);
++  bind(natural, "Hacks/PPU/Mode7/WsMarker", hacks.ppu.mode7.wsMarker);
++  bind(natural, "Hacks/PPU/Mode7/WsMarkerAlpha", hacks.ppu.mode7.wsMarkerAlpha);
+   bind(boolean, "Hacks/PPU/Mode7/Supersample", hacks.ppu.mode7.supersample);
+-  bind(boolean, "Hacks/PPU/Mode7/Mosaic", hacks.ppu.mode7.mosaic);
++  bind(natural, "Hacks/PPU/Mode7/SsFactor", hacks.ppu.mode7.ssFactor);
++  bind(natural, "Hacks/PPU/Mode7/Mosaic", hacks.ppu.mode7.mosaic);
+   bind(boolean, "Hacks/DSP/Fast", hacks.dsp.fast);
+   bind(boolean, "Hacks/DSP/Cubic", hacks.dsp.cubic);
+   bind(boolean, "Hacks/DSP/EchoShadow", hacks.dsp.echoShadow);
+diff --git a/bsnes/sfc/interface/configuration.hpp b/bsnes/sfc/interface/configuration.hpp
+index 5f4bd683c..228981ad2 100644
+--- a/bsnes/sfc/interface/configuration.hpp
++++ b/bsnes/sfc/interface/configuration.hpp
+@@ -23,8 +23,13 @@ struct Configuration {
+   } system;
+ 
+   struct Video {
++    bool aspectCorrection = false;
++    bool overscan = false;
+     bool blurEmulation = true;
+     bool colorEmulation = true;
++    uint saturation = 100;
++    uint gamma = 100;
++    uint luminance = 100;
+   } video;
+ 
+   struct Hacks {
+@@ -33,18 +38,36 @@ struct Configuration {
+     struct CPU {
+       uint overclock = 100;
+       bool fastMath = false;
++      bool fastJoypadPolling = false;
+     } cpu;
+     struct PPU {
+       bool fast = true;
+       bool deinterlace = true;
+-      bool noSpriteLimit = false;
++      bool noSpriteLimit = true;
+       bool noVRAMBlocking = false;
+       uint renderCycle = 512;
+       struct Mode7 {
+-        uint scale = 1;
+-        bool perspective = true;
++        uint scale = 2;
++        uint perspective = 1;
++        uint widescreen = 64;
++        uint wsbg1 = 16;
++        uint wsbg2 = 16;
++        uint wsbg3 = 16;
++        uint wsbg4 = 16;
++        uint wsobj = 0;
++        uint igwin = 1;
++        uint igwinx = 128;
++        bool strwin = false;
++        uint vramExt = 0x7fff;
++        uint bgGrad = 4;
++        uint windRad = 0;
++        uint wsMode = 1;
++        uint wsBgCol = 1;
++        uint wsMarker = 0;
++        uint wsMarkerAlpha = 1;
+         bool supersample = false;
+-        bool mosaic = true;
++        uint ssFactor = 1;
++        uint mosaic = 1;
+       } mode7;
+     } ppu;
+     struct DSP {
+diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.cpp
+index 2a9126cc9..1e887be04 100644
+--- a/bsnes/sfc/ppu-fast/background.cpp
++++ b/bsnes/sfc/ppu-fast/background.cpp
+@@ -3,10 +3,38 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+   if(self.tileMode == TileMode::Mode7) return renderMode7(self, source);
+   if(self.tileMode == TileMode::Inactive) return;
+ 
+-  bool windowAbove[256];
+-  bool windowBelow[256];
+-  renderWindow(self.window, self.window.aboveEnable, windowAbove);
+-  renderWindow(self.window, self.window.belowEnable, windowBelow);
++  uint wsConf = ppufast.wsbg(source);
++  if(wsConf == 14) {
++    return;
++  }
++  bool autoCrop = false;
++  int ws = (int)ppufast.widescreen();
++  if(ws > 0) {
++    if(ppufast.wsOverride()) {
++      ws = 0;
++    } else if(wsConf == 12) {
++      ws = -8;
++    } else if(wsConf == 13) {
++      ws = 0;
++      autoCrop = true;
++    } else if(wsConf == 15) {
++      if (self.tileSize == 0 && self.hoffset == 0) ws = 0;
++    } else if(wsConf == 16) {
++      if (self.tileSize == 0 && self.hoffset == 0 && self.voffset == 0) ws = 0;
++    } else if(wsConf == 0
++        || (wsConf >= 2 && wsConf <= 11 && (((wsConf % 2) != 0) == (y < (((int)(wsConf / 2)) * 40))))
++        || (wsConf >= 1000 && wsConf < 3000 && ((wsConf < 2000) != (y < ((int)(wsConf % 1000)))))
++        ) {
++      ws = 0;
++    }
++  } 
++
++  bool windowAbove[1024];
++  bool windowBelow[1024];
++  renderWindow(self.window, self.window.aboveEnable, windowAbove,
++               ppufast.widescreen(), ppufast.strwin());
++  renderWindow(self.window, self.window.belowEnable, windowBelow,
++               ppufast.widescreen(), ppufast.strwin());
+ 
+   bool hires = io.bgMode == 5 || io.bgMode == 6;
+   bool offsetPerTileMode = io.bgMode == 2 || io.bgMode == 4 || io.bgMode == 6;
+@@ -28,13 +56,13 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+   uint vmask = (width << self.tileSize << !!(self.screenSize & 2)) - 1;
+ 
+   uint y = this->y;
+-
++  if(self.mosaicEnable) y -= io.mosaic.size - io.mosaic.counter;
+   if(hires) {
+     hscroll <<= 1;
+-    if(io.interlace) y = y << 1 | (field() && !self.mosaicEnable);
+-  }
+-  if(self.mosaicEnable) {
+-    y -= (io.mosaic.size - io.mosaic.counter) << (hires && io.interlace);
++    if(io.interlace) {
++      y = y << 1 | field();
++      if(self.mosaicEnable) y -= io.mosaic.size - io.mosaic.counter + field();
++    }
+   }
+ 
+   uint mosaicCounter = 1;
+@@ -42,8 +70,10 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+   uint8 mosaicPriority = 0;
+   uint16 mosaicColor = 0;
+ 
+-  int x = 0 - (hscroll & 7);
+-  while(x < width) {
++  auto luma = ppu.lightTable[io.displayBrightness];
++  bool lastCropped = false;
++  int x = 0 - (hscroll & 7) - ws;
++  while(x < (width + ws)) {
+     uint hoffset = x + hscroll;
+     uint voffset = y + vscroll;
+     if(offsetPerTileMode) {
+@@ -85,7 +115,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+     tileNumber = (tileNumber & 0x03ff) + tiledataIndex & tileMask;
+ 
+     uint16 address;
+-    address = (tileNumber << colorShift) + (voffset & 7 ^ mirrorY) & 0x7fff;
++    address = ppu.vramExt((tileNumber << colorShift) + (voffset & 7 ^ mirrorY)) /*& 0x7fff*/;
+ 
+     uint64 data;
+     data  = (uint64)ppu.vram[address +  0] <<  0;
+@@ -94,7 +124,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+     data |= (uint64)ppu.vram[address + 24] << 48;
+ 
+     for(uint tileX = 0; tileX < 8; tileX++, x++) {
+-      if(x & width) continue;  //x < 0 || x >= width
++      if(x < -ws || x >= width + ws) continue;   //if(x & width) continue;  //x < 0 || x >= width
+       if(--mosaicCounter == 0) {
+         uint color, shift = mirrorX ? tileX : 7 - tileX;
+       /*if(self.tileMode >= TileMode::BPP2)*/ {
+@@ -112,7 +142,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+           color += data >> shift + 49 & 128;
+         }
+ 
+-        mosaicCounter = self.mosaicEnable ? io.mosaic.size << hires : 1;
++        mosaicCounter = self.mosaicEnable ? io.mosaic.size : 1;
+         mosaicPalette = color;
+         mosaicPriority = tilePriority;
+         if(directColorMode) {
+@@ -121,22 +151,34 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+           mosaicColor = cgram[paletteIndex + mosaicPalette];
+         }
+       }
+-      if(!mosaicPalette) continue;
++      if(!mosaicPalette) { lastCropped = false; continue; };
++      if(autoCrop && (lastCropped || x < 8 || x > 255-8) && mosaicColor == 0) { lastCropped = true; continue; } else { lastCropped = false; }
++
++      uint32 mctc = luma[mosaicColor];
+ 
+       if(!hires) {
+-        if(self.aboveEnable && !windowAbove[x]) plotAbove(x, source, mosaicPriority, mosaicColor);
+-        if(self.belowEnable && !windowBelow[x]) plotBelow(x, source, mosaicPriority, mosaicColor);
++        if(ppufast.hires() && ppufast.hd()) {
++          // In hires mode non-hires backgrounds seem to be rendered on every second pixel (see water in Kirby)
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(x, false)]) plotHD(above, x, source, mosaicPriority, mctc, true, true);
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(x, false)]) plotHD(below, x, source, mosaicPriority, mctc, true, true);
++          // So we force low priority for half of every pixel
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(x, false)]) plotHD(above, x, source, self.priority[0], mctc, true, false);
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(x, false)]) plotHD(below, x, source, self.priority[0], mctc, true, false);
++        } else {
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(x, false)]) plotAbove(x, source, mosaicPriority, mctc);
++          if(self.belowEnable && !windowBelow[ppufast.winXad(x, true)]) plotBelow(x, source, mosaicPriority, mctc);
++        }
+       } else {
+-        uint X = x >> 1;
+-        if(!ppu.hd()) {
++        int X = x / 2;
++        if(!ppufast.hd()) {
+           if(x & 1) {
+-            if(self.aboveEnable && !windowAbove[X]) plotAbove(X, source, mosaicPriority, mosaicColor);
++            if(self.aboveEnable && !windowAbove[ppufast.winXad(X, false)]) plotAbove(X, source, mosaicPriority, mctc);
+           } else {
+-            if(self.belowEnable && !windowBelow[X]) plotBelow(X, source, mosaicPriority, mosaicColor);
++            if(self.belowEnable && !windowBelow[ppufast.winXad(X, true)]) plotBelow(X, source, mosaicPriority, mctc);
+           }
+         } else {
+-          if(self.aboveEnable && !windowAbove[X]) plotHD(above, X, source, mosaicPriority, mosaicColor, true, x & 1);
+-          if(self.belowEnable && !windowBelow[X]) plotHD(below, X, source, mosaicPriority, mosaicColor, true, x & 1);
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(X, false)]) plotHD(above, X, source, mosaicPriority, mctc, true, x & 1);
++          if(self.belowEnable && !windowBelow[ppufast.winXad(X, true)]) plotHD(below, X, source, mosaicPriority, mctc, true, x & 1);
+         }
+       }
+     }
+@@ -154,5 +196,5 @@ auto PPU::Line::getTile(PPU::IO::Background& self, uint hoffset, uint voffset) -
+   uint offset = (tileY & 0x1f) << 5 | (tileX & 0x1f);
+   if(tileX & 0x20) offset += screenX;
+   if(tileY & 0x20) offset += screenY;
+-  return ppu.vram[self.screenAddress + offset & 0x7fff];
++  return ppu.vram[ppu.vramExt(self.screenAddress + offset) /*& 0x7fff*/];
+ }
+diff --git a/bsnes/sfc/ppu-fast/io.cpp b/bsnes/sfc/ppu-fast/io.cpp
+index 4e445a033..24843e9b1 100644
+--- a/bsnes/sfc/ppu-fast/io.cpp
++++ b/bsnes/sfc/ppu-fast/io.cpp
+@@ -13,10 +13,10 @@ auto PPU::latchCounters() -> void {
+ auto PPU::vramAddress() const -> uint {
+   uint address = io.vramAddress;
+   switch(io.vramMapping) {
+-  case 0: return address & 0x7fff;
+-  case 1: return address & 0x7f00 | address << 3 & 0x00f8 | address >> 5 & 7;
+-  case 2: return address & 0x7e00 | address << 3 & 0x01f8 | address >> 6 & 7;
+-  case 3: return address & 0x7c00 | address << 3 & 0x03f8 | address >> 7 & 7;
++  case 0: return ppu.vramExt(address & 0xffff /*0x7fff*/);
++  case 1: return ppu.vramExt(address & 0xff00 /*0x7f00*/| address << 3 & 0x00f8 | address >> 5 & 7);
++  case 2: return ppu.vramExt(address & 0xfe00 /*0x7e00*/| address << 3 & 0x01f8 | address >> 6 & 7);
++  case 3: return ppu.vramExt(address & 0xfc00 /*0x7c00*/| address << 3 & 0x03f8 | address >> 7 & 7);
+   }
+   unreachable;
+ }
+@@ -263,37 +263,37 @@ auto PPU::writeIO(uint address, uint8 data) -> void {
+ 
+   case 0x2107: {  //BG1SC
+     io.bg1.screenSize    = data >> 0 & 3;
+-    io.bg1.screenAddress = data << 8 & 0x7c00;
++    io.bg1.screenAddress = ppu.vramExt(data << 8 & 0xfc00) /*0x7c00*/;
+     return;
+   }
+ 
+   case 0x2108: {  //BG2SC
+     io.bg2.screenSize    = data >> 0 & 3;
+-    io.bg2.screenAddress = data << 8 & 0x7c00;
++    io.bg2.screenAddress = ppu.vramExt(data << 8 & 0xfc00) /*0x7c00*/;
+     return;
+   }
+ 
+   case 0x2109: {  //BG3SC
+     io.bg3.screenSize    = data >> 0 & 3;
+-    io.bg3.screenAddress = data << 8 & 0x7c00;
++    io.bg3.screenAddress = ppu.vramExt(data << 8 & 0xfc00) /*0x7c00*/;
+     return;
+   }
+ 
+   case 0x210a: {  //BG4SC
+     io.bg4.screenSize    = data >> 0 & 3;
+-    io.bg4.screenAddress = data << 8 & 0x7c00;
++    io.bg4.screenAddress = ppu.vramExt(data << 8 & 0xfc00) /*0x7c00*/;
+     return;
+   }
+ 
+   case 0x210b: {  //BG12NBA
+-    io.bg1.tiledataAddress = data << 12 & 0x7000;
+-    io.bg2.tiledataAddress = data <<  8 & 0x7000;
++    io.bg1.tiledataAddress = ppu.vramExt(data << 12 & 0xf000) /*0x7000*/;
++    io.bg2.tiledataAddress = ppu.vramExt(data <<  8 & 0xf000) /*0x7000*/;
+     return;
+   }
+ 
+   case 0x210c: {  //BG34NBA
+-    io.bg3.tiledataAddress = data << 12 & 0x7000;
+-    io.bg4.tiledataAddress = data <<  8 & 0x7000;
++    io.bg3.tiledataAddress = ppu.vramExt(data << 12 & 0xf000) /*0x7000*/;
++    io.bg4.tiledataAddress = ppu.vramExt(data <<  8 & 0xf000) /*0x7000*/;
+     return;
+   }
+ 
+diff --git a/bsnes/sfc/ppu-fast/line.cpp b/bsnes/sfc/ppu-fast/line.cpp
+index 7edf7e184..551430c3b 100644
+--- a/bsnes/sfc/ppu-fast/line.cpp
++++ b/bsnes/sfc/ppu-fast/line.cpp
+@@ -1,7 +1,76 @@
++#include <emulator/hdtoolkit.hpp>
+ uint PPU::Line::start = 0;
+ uint PPU::Line::count = 0;
+ 
+ auto PPU::Line::flush() -> void {
++
++  ppu.wsExt = HdToolkit::determineWsExt(ppu.widescreenRaw(),
++        configuration.video.overscan, configuration.video.aspectCorrection);
++
++  if (ppu.luminance != configuration.video.luminance ||
++        ppu.saturation != configuration.video.saturation ||
++        ppu.gamma != configuration.video.gamma) {
++    uint luminance = configuration.video.luminance;
++    uint saturation = configuration.video.saturation;
++    uint gamma = configuration.video.gamma;
++    ppu.luminance = luminance;
++    ppu.saturation = saturation;
++    ppu.gamma = gamma;
++    for(uint l : range(16)) {
++      if (ppu.lightTable[l]) delete [] ppu.lightTable[l];
++      ppu.lightTable[l] = new uint32_t[32768];
++      for(uint r : range(32)) {
++        for(uint g : range(32)) {
++          for(uint b : range(32)) {
++            double dr = r * 255.0 / 31.0;
++            double dg = g * 255.0 / 31.0;
++            double db = b * 255.0 / 31.0;
++  
++            if(saturation != 100) {
++              double satVal = saturation / 100.0;
++              double grayInv = (dr + dg + db) / 3 * max(0.0, 1.0 - satVal);
++              dr = dr * satVal + grayInv;
++              dg = dg * satVal + grayInv;
++              db = db * satVal + grayInv;
++            }
++  
++            if(gamma != 100) {
++              double gamVal = gamma / 100.0;
++              double reciprocal = 1.0 / 127.0;
++              dr = dr > 127.0 ? dr : 127.0 * pow(dr * reciprocal, gamVal);
++              dg = dg > 127.0 ? dg : 127.0 * pow(dg * reciprocal, gamVal);
++              db = db > 127.0 ? db : 127.0 * pow(db * reciprocal, gamVal);
++            }
++
++            if(luminance != 100) {
++              double lumVal = luminance / 100.0;
++              dr *= lumVal;
++              dg *= lumVal;
++              db *= lumVal;
++            }
++
++            double lVal = l / 15.0;
++            dr *= lVal;
++            dg *= lVal;
++            db *= lVal;
++
++            int ar = dr + 0.5;
++            int ag = dg + 0.5;
++            int ab = db + 0.5;
++            if (ar > 255) ar = 255;
++            if (ag > 255) ag = 255;
++            if (ab > 255) ab = 255;
++            if (ar < 0) ar = 0;
++            if (ag < 0) ag = 0;
++            if (ab < 0) ab = 0;
++
++            ppu.lightTable[l][r << 10 | g << 5 | b << 0] = ab << 16 | ag << 8 | ar << 0;
++          }
++        }
++      }
++    }
++  }
++
+   if(Line::count) {
+     if(ppu.hdScale() > 1) cacheMode7HD();
+     #pragma omp parallel for if(Line::count >= 8)
+@@ -37,34 +106,115 @@ auto PPU::Line::cache() -> void {
+   Line::count++;
+ }
+ 
++auto PPU::Line::avgBgC(uint dist, uint offset) const -> uint32 {
++  auto luma = ppu.lightTable[io.displayBrightness];
++  uint32 t = luma[io.col.fixedColor];
++  if(dist < 1) return t;
++  int32 aBase = (t >> 16) & 255;
++  int32 bBase = (t >>  8) & 255;
++  int32 cBase = (t >>  0) & 255;
++  uint32 a = aBase;
++  uint32 b = bBase;
++  uint32 c = cBase;
++  int32 aU = 0;
++  int32 bU = 0;
++  int32 cU = 0;
++  int32 aD = 0;
++  int32 bD = 0;
++  int32 cD = 0;
++  int scale = ppufast.hd() ? ppufast.hdScale() : 1;
++  int hdY = y * scale + offset;
++  int count = 1;
++  for (int i = 1; i <= dist*scale; i++) {
++    int uY = (hdY-i)/scale;
++    int dY = (hdY+i)/scale;
++    if(uY < 0 || dY >= 224) break; /////////////////////////////
++    auto uL = ppufast.lines[uY];
++    auto dL = ppufast.lines[dY];
++    if( io.col.halve     != dL.io.col.halve     || io.col.halve     != uL.io.col.halve     ||
++        io.col.mathMode  != dL.io.col.mathMode  || io.col.mathMode  != uL.io.col.mathMode  ||
++        io.col.blendMode != dL.io.col.blendMode || io.col.blendMode != uL.io.col.blendMode ||
++        io.col.enable[0] != dL.io.col.enable[0] || io.col.enable[0] != uL.io.col.enable[0] ||
++        io.col.enable[1] != dL.io.col.enable[1] || io.col.enable[1] != uL.io.col.enable[1] ||
++        io.col.enable[2] != dL.io.col.enable[2] || io.col.enable[2] != uL.io.col.enable[2] ||
++        io.col.enable[3] != dL.io.col.enable[3] || io.col.enable[3] != uL.io.col.enable[3] ||
++        io.col.enable[4] != dL.io.col.enable[4] || io.col.enable[4] != uL.io.col.enable[4] ||
++        io.col.enable[5] != dL.io.col.enable[5] || io.col.enable[5] != uL.io.col.enable[5] ||
++        io.col.enable[6] != dL.io.col.enable[6] || io.col.enable[6] != uL.io.col.enable[6] ||
++        io.bg1.tileMode  != dL.io.bg1.tileMode  || io.bg1.tileMode  != uL.io.bg1.tileMode  ||
++        io.bg2.tileMode  != dL.io.bg2.tileMode  || io.bg2.tileMode  != uL.io.bg2.tileMode  ||
++        io.bg3.tileMode  != dL.io.bg3.tileMode  || io.bg3.tileMode  != uL.io.bg3.tileMode  ||
++        io.bg4.tileMode  != dL.io.bg4.tileMode  || io.bg4.tileMode  != uL.io.bg4.tileMode) break; 
++    t = luma[uL.io.col.fixedColor];
++    aU = (t >> 16) & 255;
++    bU = (t >>  8) & 255;
++    cU = (t >>  0) & 255;
++    t = luma[dL.io.col.fixedColor];
++    aD = (t >> 16) & 255;
++    bD = (t >>  8) & 255;
++    cD = (t >>  0) & 255;
++    if (((abs(aU - aBase) + abs(bU - bBase) + abs(cU - cBase)) > 76) ||
++        ((abs(aD - aBase) + abs(bD - bBase) + abs(cD - cBase)) > 76)) break;
++    a += aU + aD;
++    b += bU + bD;
++    c += cU + cD;
++    count += 2;
++  }
++  a /= count;
++  b /= count;
++  c /= count;
++  return (a << 16) + (b << 8) + (c << 0);
++}
++
+ auto PPU::Line::render(bool fieldID) -> void {
+   this->fieldID = fieldID;
+   uint y = this->y + (!ppu.latch.overscan ? 7 : 0);
+ 
+   auto hd = ppu.hd();
+   auto ss = ppu.ss();
+-  auto scale = ppu.hdScale();
++  auto scale = ppufast.hd() ? ppufast.hdScale() : 1;
+   auto output = ppu.output + (!hd
+   ? (y * 1024 + (ppu.interlace() && field() ? 512 : 0))
+-  : (y * 256 * scale * scale)
++  : (y * (256+2*ppu.widescreen()) * scale * scale)
+   );
+   auto width = (!hd
+   ? (!ppu.hires() ? 256 : 512)
+-  : (256 * scale * scale));
++  : ((256+2*ppu.widescreen()) * scale * scale));
+ 
+   if(io.displayDisable) {
+-    memory::fill<uint16>(output, width);
++    memory::fill<uint32>(output, width);
+     return;
+   }
+ 
+   bool hires = io.pseudoHires || io.bgMode == 5 || io.bgMode == 6;
+-  uint16 aboveColor = cgram[0];
+-  uint16 belowColor = hires ? cgram[0] : io.col.fixedColor;
+-  uint xa =  (hd || ss) && ppu.interlace() && field() ? 256 * scale * scale / 2 : 0;
+-  uint xb = !(hd || ss) ? 256 : ppu.interlace() && !field() ? 256 * scale * scale / 2 : 256 * scale * scale;
+-  for(uint x = xa; x < xb; x++) {
+-    above[x] = {Source::COL, 0, aboveColor};
+-    below[x] = {Source::COL, 0, belowColor};
++  
++  auto luma = ppu.lightTable[io.displayBrightness];
++  auto aboveColor = luma[cgram[0]];
++  uint32 *bgFixedColors = new uint32[10];
++  uint32 *belowColors = new uint32[10];
++  for (int i = 0; i < scale; i++) {
++    bgFixedColors[i] = avgBgC(ppufast.bgGrad(), i);
++    belowColors[i]  = hires ? aboveColor : bgFixedColors[i];
++  }
++
++  uint xa =  (hd || ss) && ppu.interlace() && field() ? (256+2*ppu.widescreen())  * scale * scale / 2 : 0;
++  uint xb = !(hd || ss) ? 256 : ppu.interlace() && !ppu.field() ? (256+2*ppu.widescreen()) * scale * scale / 2 : (256+2*ppu.widescreen()) * scale * scale;
++  if (hd && ppu.wsBgCol() && ppu.widescreen() > 0) {
++    for(uint x = xa; x < xb; x++) {
++      int cx = (x % ((256+2*ppu.widescreen()) * scale)) - (ppu.widescreen() * scale);
++      if (cx >= 0 && cx < (256 * scale)) {
++        above[x] = {Source::COL, 0, aboveColor};
++        below[x] = {Source::COL, 0, belowColors[x / ((256+2*ppufast.widescreen()) * scale)]};
++      } else {
++        above[x] = {Source::COL, 0, 0};
++        below[x] = {Source::COL, 0, 0};
++      }
++    }
++  } else {
++    for(uint x = xa; x < xb; x++) {
++      above[x] = {Source::COL, 0, aboveColor};
++      below[x] = {Source::COL, 0, belowColors[x / ((256+2*ppufast.widescreen()) * scale)]};
++    }
+   }
+ 
+   //hack: generally, renderBackground/renderObject ordering do not matter.
+@@ -77,61 +227,201 @@ auto PPU::Line::render(bool fieldID) -> void {
+   renderBackground(io.bg4, Source::BG4);
+   renderObject(io.obj);
+   if(io.extbg == 1) renderBackground(io.bg2, Source::BG2);
+-  renderWindow(io.col.window, io.col.window.aboveMask, windowAbove);
+-  renderWindow(io.col.window, io.col.window.belowMask, windowBelow);
+ 
+-  auto luma = ppu.lightTable[io.displayBrightness];
++  //TODO: move to own method
++  int THRESHOLD = 4;
++  y = this->y;
++  uint windRad = ppufast.windRad();
++  for (int offset = 0; offset < scale; offset++) {
++    int oneLeft  = io.window.oneLeft;
++    int oneRight = io.window.oneRight;
++    int twoLeft  = io.window.twoLeft;
++    int twoRight = io.window.twoRight;
++
++    int hdY = y * scale + offset;
++    int count = 1;
++    for (int i = 1; i <= windRad*scale; i++) {
++      int uY = (hdY-i)/scale;
++      int dY = (hdY+i)/scale;
++      if(uY <= 0 || dY >= 224) break;
++      auto uL = ppufast.lines[uY];
++      auto dL = ppufast.lines[dY];
++
++      if( io.col.halve     != dL.io.col.halve     || io.col.halve     != uL.io.col.halve     ||
++          io.col.mathMode  != dL.io.col.mathMode  || io.col.mathMode  != uL.io.col.mathMode  ||
++          io.col.blendMode != dL.io.col.blendMode || io.col.blendMode != uL.io.col.blendMode ||
++          (io.window.oneLeft >= io.window.oneRight) != (dL.io.window.oneLeft >= dL.io.window.oneRight) ||
++          (io.window.oneLeft >= io.window.oneRight) != (uL.io.window.oneLeft >= uL.io.window.oneRight) ||
++          (io.window.twoLeft >= io.window.twoRight) != (dL.io.window.twoLeft >= dL.io.window.twoRight) ||
++          (io.window.twoLeft >= io.window.twoRight) != (uL.io.window.twoLeft >= uL.io.window.twoRight) ||
++          io.col.window.oneEnable != dL.io.col.window.oneEnable ||
++          io.col.window.oneEnable != uL.io.col.window.oneEnable ||
++          io.col.window.oneInvert != dL.io.col.window.oneInvert ||
++          io.col.window.oneInvert != uL.io.col.window.oneInvert ||
++          io.col.window.twoEnable != dL.io.col.window.twoEnable ||
++          io.col.window.twoEnable != uL.io.col.window.twoEnable ||
++          io.col.window.twoInvert != dL.io.col.window.twoInvert ||
++          io.col.window.twoInvert != uL.io.col.window.twoInvert ||
++          io.col.window.mask != dL.io.col.window.mask ||
++          io.col.window.mask != uL.io.col.window.mask ||
++          io.col.window.aboveMask != dL.io.col.window.aboveMask ||
++          io.col.window.aboveMask != uL.io.col.window.aboveMask ||
++          io.col.window.belowMask != dL.io.col.window.belowMask ||
++          io.col.window.belowMask != uL.io.col.window.belowMask
++          || dL.io.window.oneLeft - io.window.oneLeft > THRESHOLD
++          || io.window.oneLeft - dL.io.window.oneLeft > THRESHOLD
++          || uL.io.window.oneLeft - io.window.oneLeft > THRESHOLD
++          || io.window.oneLeft - uL.io.window.oneLeft > THRESHOLD
++          || dL.io.window.oneRight - io.window.oneRight > THRESHOLD
++          || io.window.oneRight - dL.io.window.oneRight > THRESHOLD
++          || uL.io.window.oneRight - io.window.oneRight > THRESHOLD
++          || io.window.oneRight - uL.io.window.oneRight > THRESHOLD
++          || dL.io.window.twoLeft - io.window.twoLeft > THRESHOLD
++          || io.window.twoLeft - dL.io.window.twoLeft > THRESHOLD
++          || uL.io.window.twoLeft - io.window.twoLeft > THRESHOLD
++          || io.window.twoLeft - uL.io.window.twoLeft > THRESHOLD
++          || dL.io.window.twoRight - io.window.twoRight > THRESHOLD
++          || io.window.twoRight - dL.io.window.twoRight > THRESHOLD
++          || uL.io.window.twoRight - io.window.twoRight > THRESHOLD
++          || io.window.twoRight - uL.io.window.twoRight > THRESHOLD
++          ) break; 
++
++      oneLeft  += dL.io.window.oneLeft  + uL.io.window.oneLeft;
++      oneRight += dL.io.window.oneRight + uL.io.window.oneRight;
++      twoLeft  += dL.io.window.twoLeft  + uL.io.window.twoLeft;
++      twoRight += dL.io.window.twoRight + uL.io.window.twoRight;
++
++      count += 2;
++    }
++    if (ppu.strwin()) {
++      oneLeft  *= 2;
++      oneRight *= 2;
++      twoLeft  *= 2;
++      twoRight *= 2;
++    }
++    int ws = ppu.widescreen() * scale;
++    oneLeft  = oneLeft  * scale / count + ws;
++    oneRight = oneRight * scale / count + ws + scale - 1;
++    twoLeft  = twoLeft  * scale / count + ws;
++    twoRight = twoRight * scale / count + ws + scale - 1;
++
++    if (ppu.strwin()) {
++      oneLeft  -= 128 * scale;
++      oneRight -= 128 * scale;
++      twoLeft  -= 128 * scale;
++      twoRight -= 128 * scale;
++    } else {
++      int lw = 0 - scale * 10;
++      int l  = ws + scale;
++      int r  = ws + 255 * scale;
++      int rw = ws + 255 * scale + ws + scale * 10;
++      if (oneLeft < l) {
++        oneLeft = lw;
++      } else if (oneLeft >= r) {
++        oneLeft = rw;
++      }
++      if (oneRight < l) {
++        oneRight = lw;
++      } else if (oneRight >= r) {
++        oneRight = rw;
++      }
++      if (twoLeft < l) {
++        twoLeft = lw;
++      } else if (twoLeft >= r) {
++        twoLeft = rw;
++      }
++      if (twoRight < l) {
++        twoRight = lw;
++      } else if (twoRight >= r) {
++        twoRight = rw;
++      } 
++    }
++
++    renderWindow(io.col.window, io.col.window.aboveMask, windowAbove,
++                oneLeft, oneRight, twoLeft, twoRight, scale,
++                (256 + 2 * ppu.widescreen())*scale*offset, ppu.widescreen());
++    renderWindow(io.col.window, io.col.window.belowMask, windowBelow,
++                oneLeft, oneRight, twoLeft, twoRight, scale,
++                (256 + 2 * ppu.widescreen())*scale*offset, ppu.widescreen());
++  }
++
++  uint wsm = (ppu.widescreen() == 0 || ppu.wsOverride()) ? 0 : ppu.wsMarker();
++  uint wsma = ppu.wsMarkerAlpha();
++
+   uint curr = 0, prev = 0;
+-  if(hd) for(uint x : range(256 * scale * scale)) {
+-    *output++ = luma[pixel(x / scale & 255, above[x], below[x])];
++  if(hd) {
++    int x = 0;
++    for(uint ySub : range(scale)) {
++      for(uint i : range((256 + 2 * ppufast.widescreen() ) * scale)) {
++        *output++ = pixel(x, above[x], below[x], ppu.widescreen(), wsm, wsma, bgFixedColors[ySub]);
++        x++;
++      }
++    }
+   } else if(width == 256) for(uint x : range(256)) {
+-    *output++ = luma[pixel(x, above[x], below[x])];
++    *output++ = pixel(x, above[x], below[x], 0, 0, 0, bgFixedColors[0]);
+   } else if(!hires) for(uint x : range(256)) {
+-    auto color = luma[pixel(x, above[x], below[x])];
++    auto color = pixel(x, above[x], below[x], 0, 0, 0, bgFixedColors[0]);
+     *output++ = color;
+     *output++ = color;
+   } else if(!configuration.video.blurEmulation) for(uint x : range(256)) {
+-    *output++ = luma[pixel(x, below[x], above[x])];
+-    *output++ = luma[pixel(x, above[x], below[x])];
++    *output++ = pixel(x, below[x], above[x], 0, 0, 0, bgFixedColors[0]);
++    *output++ = pixel(x, above[x], below[x], 0, 0, 0, bgFixedColors[0]);
+   } else for(uint x : range(256)) {
+-    curr = luma[pixel(x, below[x], above[x])];
+-    *output++ = (prev + curr - ((prev ^ curr) & 0x0421)) >> 1;
++    curr = pixel(x, below[x], above[x], 0, 0, 0, bgFixedColors[0]);
++    *output++ = (prev + curr - ((prev ^ curr) & 0x00010101)) >> 1;
+     prev = curr;
+-    curr = luma[pixel(x, above[x], below[x])];
+-    *output++ = (prev + curr - ((prev ^ curr) & 0x0421)) >> 1;
++    curr = pixel(x, above[x], below[x], 0, 0, 0, bgFixedColors[0]);
++    *output++ = (prev + curr - ((prev ^ curr) & 0x00010101)) >> 1;
+     prev = curr;
+   }
++
++  delete [] bgFixedColors;
++  delete [] belowColors;
++
+ }
+ 
+-auto PPU::Line::pixel(uint x, Pixel above, Pixel below) const -> uint16 {
+-  if(!windowAbove[x]) above.color = 0x0000;
+-  if(!windowBelow[x]) return above.color;
+-  if(!io.col.enable[above.source]) return above.color;
+-  if(!io.col.blendMode) return blend(above.color, io.col.fixedColor, io.col.halve && windowAbove[x]);
+-  return blend(above.color, below.color, io.col.halve && windowAbove[x] && below.source != Source::COL);
++auto PPU::Line::pixel(uint x, Pixel above, Pixel below, uint ws, uint wsm,
++                      uint wsma, uint32 bgFixedColor) const -> uint32 { 
++  uint32 r = 0;
++  if(!windowAbove[ppufast.winXadHd(x, false)]) above.color = 0x0000;
++  if(!windowBelow[ppufast.winXadHd(x, true)]) r = above.color;
++  else if(!io.col.enable[above.source]) r = above.color;
++  else if(!io.col.blendMode) r = blend(above.color, bgFixedColor, io.col.halve && windowAbove[x]);
++  else r = blend(above.color, below.color, io.col.halve && windowAbove[x] && below.source != Source::COL);
++  if(wsm > 0) {
++    x /= ppufast.hdScale();
++    x %= 256 + 2 * ws;
++    if(x == ws - 1 || x == ws + 256 || wsm == 2 && (x <= ws - 1 || x >= ws + 256)) {
++      int b = wsm == 2 ? 0 : ((y / 4) % 2 == 0) ? 0 : 255;
++      r = ((((((r >> 16) & 255) * wsma) + b) / (wsma + 1)) << 16)
++        + ((((((r >>  8) & 255) * wsma) + b) / (wsma + 1)) <<  8)
++        + ((((((r >>  0) & 255) * wsma) + b) / (wsma + 1)) <<  0);
++    }
++  }
++  return r;
+ }
+ 
+-auto PPU::Line::blend(uint x, uint y, bool halve) const -> uint16 {
++auto PPU::Line::blend(uint x, uint y, bool halve) const -> uint32 {
+   if(!io.col.mathMode) {  //add
+     if(!halve) {
+       uint sum = x + y;
+-      uint carry = (sum - ((x ^ y) & 0x0421)) & 0x8420;
+-      return (sum - carry) | (carry - (carry >> 5));
++      uint carry = (sum - ((x ^ y) & 0x00010101)) & 0x01010100;
++      return (sum - carry) | (carry - (carry >> 8));
+     } else {
+-      return (x + y - ((x ^ y) & 0x0421)) >> 1;
++      return (x + y - ((x ^ y) & 0x00010101)) >> 1;
+     }
+   } else {  //sub
+-    uint diff = x - y + 0x8420;
+-    uint borrow = (diff - ((x ^ y) & 0x8420)) & 0x8420;
++    uint diff = x - y + 0x01010100;
++    uint borrow = (diff - ((x ^ y) & 0x01010100)) & 0x01010100;
+     if(!halve) {
+-      return   (diff - borrow) & (borrow - (borrow >> 5));
++      return   (diff - borrow) & (borrow - (borrow >> 8));
+     } else {
+-      return (((diff - borrow) & (borrow - (borrow >> 5))) & 0x7bde) >> 1;
++      return (((diff - borrow) & (borrow - (borrow >> 8))) & 0x00fefefe) >> 1;
+     }
+   }
+ }
+ 
+-auto PPU::Line::directColor(uint paletteIndex, uint paletteColor) const -> uint16 {
++auto PPU::Line::directColor(uint paletteIndex, uint paletteColor) const -> uint32 {
+   //paletteIndex = bgr
+   //paletteColor = BBGGGRRR
+   //output       = 0 BBb00 GGGg0 RRRr0
+@@ -140,32 +430,33 @@ auto PPU::Line::directColor(uint paletteIndex, uint paletteColor) const -> uint1
+        + (paletteColor << 7 & 0x6000) + (paletteIndex << 10 & 0x1000);  //B
+ }
+ 
+-auto PPU::Line::plotAbove(uint x, uint8 source, uint8 priority, uint16 color) -> void {
+-  if(ppu.hd()) return plotHD(above, x, source, priority, color, false, false);
++auto PPU::Line::plotAbove(int x, uint8 source, uint8 priority, uint32 color) -> void {
++  if(ppu.hd() || ppu.ss()) return plotHD(above, x, source, priority, color, false, false);
+   if(priority > above[x].priority) above[x] = {source, priority, color};
+ }
+ 
+-auto PPU::Line::plotBelow(uint x, uint8 source, uint8 priority, uint16 color) -> void {
+-  if(ppu.hd()) return plotHD(below, x, source, priority, color, false, false);
++auto PPU::Line::plotBelow(int x, uint8 source, uint8 priority, uint32 color) -> void {
++  if(ppu.hd() || ppu.ss()) return plotHD(below, x, source, priority, color, false, false);
+   if(priority > below[x].priority) below[x] = {source, priority, color};
+ }
+ 
+ //todo: name these variables more clearly ...
+-auto PPU::Line::plotHD(Pixel* pixel, uint x, uint8 source, uint8 priority, uint16 color, bool hires, bool subpixel) -> void {
+-  auto scale = ppu.hdScale();
+-  int xss = hires && subpixel ? scale / 2 : 0;
+-  int ys = ppu.interlace() && field() ? scale / 2 : 0;
+-  if(priority > pixel[x * scale + xss + ys * 256 * scale].priority) {
++auto PPU::Line::plotHD(Pixel* pixel, int x, uint8 source, uint8 priority, uint32 color, bool hires, bool subpixel) -> void {
++  int scale = ppu.hdScale();
++  int wss = ppu.widescreen() * scale;
++  int xss = hires && subpixel ? (scale / 2 + ((scale & 1 == 1) && (x & 1 == 1))) : 0;
++  int ys = ppu.interlace() && ppu.field() ? scale / 2 : 0;
++  if(priority > pixel[x * scale + xss + ys * 256 * scale + wss].priority) {
+     Pixel p = {source, priority, color};
+-    int xsm = hires && !subpixel ? scale / 2 : scale;
+-    int ysm = ppu.interlace() && !field() ? scale / 2 : scale;
++    int xsm = hires && !subpixel ? (scale / 2 + ((scale & 1 == 1) && (x & 1 == 1))) : scale;
++    int ysm = ppu.interlace() && !ppu.field() ? scale / 2 : scale;
+     for(int xs = xss; xs < xsm; xs++) {
+-      pixel[x * scale + xs + ys * 256 * scale] = p;
++      pixel[x * scale + xs + ys * 256 * scale + wss] = p;
+     }
+     int size = sizeof(Pixel) * (xsm - xss);
+-    Pixel* source = &pixel[x * scale + xss + ys * 256 * scale];
++    Pixel* source = &pixel[x * scale + xss + ys * 256 * scale + wss];
+     for(int yst = ys + 1; yst < ysm; yst++) {
+-      memcpy(&pixel[x * scale + xss + yst * 256 * scale], source, size);
++      memcpy(&pixel[x * scale + xss + yst * (256+2*ppu.widescreen()) * scale + wss], source, size);
+     }
+   }
+ }
+diff --git a/bsnes/sfc/ppu-fast/mode7.cpp b/bsnes/sfc/ppu-fast/mode7.cpp
+index dc44accfb..d9d232ab6 100644
+--- a/bsnes/sfc/ppu-fast/mode7.cpp
++++ b/bsnes/sfc/ppu-fast/mode7.cpp
+@@ -1,7 +1,8 @@
+ auto PPU::Line::renderMode7(PPU::IO::Background& self, uint8 source) -> void {
+   //HD mode 7 support
+-  if(!ppu.hdMosaic() || !self.mosaicEnable || io.mosaic.size == 1) {
+-    if(ppu.hdScale() > 1) return renderMode7HD(self, source);
++  if(ppufast.hdScale() > 0 && (ppufast.hdMosaic() != 0
++      || !self.mosaicEnable || io.mosaic.size == 1)) {
++    return renderMode7HD(self, source);
+   }
+ 
+   int Y = this->y;
+@@ -26,11 +27,14 @@ auto PPU::Line::renderMode7(PPU::IO::Background& self, uint8 source) -> void {
+   int originX = (a * clip(hoffset - hcenter) & ~63) + (b * clip(voffset - vcenter) & ~63) + (b * y & ~63) + (hcenter << 8);
+   int originY = (c * clip(hoffset - hcenter) & ~63) + (d * clip(voffset - vcenter) & ~63) + (d * y & ~63) + (vcenter << 8);
+ 
+-  bool windowAbove[256];
+-  bool windowBelow[256];
+-  renderWindow(self.window, self.window.aboveEnable, windowAbove);
+-  renderWindow(self.window, self.window.belowEnable, windowBelow);
++  bool windowAbove[1024];
++  bool windowBelow[1024];
++  renderWindow(self.window, self.window.aboveEnable, windowAbove,
++               ppufast.widescreen(), ppufast.strwin());
++  renderWindow(self.window, self.window.belowEnable, windowBelow,
++               ppufast.widescreen(), ppufast.strwin());
+ 
++  auto luma = ppu.lightTable[io.displayBrightness];
+   for(int X : range(256)) {
+     int x = !io.mode7.hflip ? X : 255 - X;
+     int pixelX = originX + a * x >> 8;
+@@ -63,7 +67,9 @@ auto PPU::Line::renderMode7(PPU::IO::Background& self, uint8 source) -> void {
+     }
+     if(!mosaicPalette) continue;
+ 
+-    if(self.aboveEnable && !windowAbove[X]) plotAbove(X, source, mosaicPriority, mosaicColor);
+-    if(self.belowEnable && !windowBelow[X]) plotBelow(X, source, mosaicPriority, mosaicColor);
++    uint32 mctc = luma[mosaicColor];
++
++    if(self.aboveEnable && !windowAbove[ppufast.winXad(X, false)]) plotAbove(X, source, mosaicPriority, mctc);
++    if(self.belowEnable && !windowBelow[ppufast.winXad(X, true)]) plotBelow(X, source, mosaicPriority, mctc);
+   }
+ }
+diff --git a/bsnes/sfc/ppu-fast/mode7hd.cpp b/bsnes/sfc/ppu-fast/mode7hd.cpp
+index 892ad25d9..8fd6f4e0b 100644
+--- a/bsnes/sfc/ppu-fast/mode7hd.cpp
++++ b/bsnes/sfc/ppu-fast/mode7hd.cpp
+@@ -7,7 +7,7 @@ auto PPU::Line::cacheMode7HD() -> void {
+     ))
+     bool state = false;
+     uint y;
+-    //find the moe 7 groups
++    //find the mode 7 groups
+     for(y = 0; y < Line::count; y++) {
+       if(state != isLineMode7(ppu.lines[Line::start + y])) {
+         state = !state;
+@@ -95,20 +95,26 @@ auto PPU::Line::cacheMode7HD() -> void {
+   }
+ }
+ 
+-auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
+-  const bool extbg = source == Source::BG2;
+-  const uint scale = ppu.hdScale();
+-
+-  Pixel  pixel;
+-  Pixel* above = &this->above[-1];
+-  Pixel* below = &this->below[-1];
+-
+-  //find the first and last scanline for interpolation
+-  int y_a = -1;
+-  int y_b = -1;
+-  #define isLineMode7(n) (ppu.lines[n].io.bg1.tileMode == TileMode::Mode7 && !ppu.lines[n].io.displayDisable && ( \
+-    (ppu.lines[n].io.bg1.aboveEnable || ppu.lines[n].io.bg1.belowEnable) \
+-  ))
++auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
++  const bool extbg = source == Source::BG2;
++  bool mosSing = self.mosaicEnable && io.mosaic.size != 1 && ppu.hdMosaic() == 1;
++  const uint sampScale = mosSing ? 1 : ppu.hdSupersample();
++  const uint scale = mosSing ? 1 : ppu.hdScale() * sampScale;
++
++  int sampSize = sampScale < 2 ? 0 : (256+2*ppu.widescreen()) * 4 * scale/sampScale;
++  uint *sampTmp = new uint[sampSize];
++  memory::fill<uint>(sampTmp, sampSize);
++
++  Pixel  pixel;
++  Pixel* above = &this->above[0];
++  Pixel* below = &this->below[0];
++
++  //find the first and last scanline for interpolation
++  int y_a = -1;
++  int y_b = -1;
++  #define isLineMode7(n) (ppu.lines[n].io.bg1.tileMode == TileMode::Mode7 && !ppu.lines[n].io.displayDisable && ( \
++    (ppu.lines[n].io.bg1.aboveEnable || ppu.lines[n].io.bg1.belowEnable) \
++  ))
+   if(ppu.hdPerspective()) {
+     //find the mode 7 line group this line is in and use its interpolation lines
+     for(int i : range(ppu.mode7LineGroups.count)) {
+@@ -122,132 +128,142 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
+   if(y_a == -1 || y_b == -1) {
+     //if perspective correction is disabled or the group was detected as non-perspective, use the neighboring lines
+     y_a = y;
+-    y_b = y;
+-    if(y_a >   1 && isLineMode7(y_a)) y_a--;
+-    if(y_b < 239 && isLineMode7(y_b)) y_b++;
+-  }
+-  #undef isLineMode7
+-
+-  Line line_a = ppu.lines[y_a];
+-  float a_a = (int16)line_a.io.mode7.a;
+-  float b_a = (int16)line_a.io.mode7.b;
+-  float c_a = (int16)line_a.io.mode7.c;
+-  float d_a = (int16)line_a.io.mode7.d;
+-
+-  Line line_b = ppu.lines[y_b];
+-  float a_b = (int16)line_b.io.mode7.a;
+-  float b_b = (int16)line_b.io.mode7.b;
+-  float c_b = (int16)line_b.io.mode7.c;
+-  float d_b = (int16)line_b.io.mode7.d;
+-
+-  int hcenter = (int13)io.mode7.x;
+-  int vcenter = (int13)io.mode7.y;
+-  int hoffset = (int13)io.mode7.hoffset;
+-  int voffset = (int13)io.mode7.voffset;
+-
+-  if(io.mode7.vflip) {
+-    y_a = 255 - y_a;
+-    y_b = 255 - y_b;
+-  }
+-
+-  bool windowAbove[256];
+-  bool windowBelow[256];
+-  renderWindow(self.window, self.window.aboveEnable, windowAbove);
+-  renderWindow(self.window, self.window.belowEnable, windowBelow);
+-
+-  int pixelYp = INT_MIN;
+-  for(int ys : range(scale)) {
+-    float yf = y + ys * 1.0 / scale - 0.5;
+-    if(io.mode7.vflip) yf = 255 - yf;
+-
+-    float a = 1.0 / lerp(y_a, 1.0 / a_a, y_b, 1.0 / a_b, yf);
+-    float b = 1.0 / lerp(y_a, 1.0 / b_a, y_b, 1.0 / b_b, yf);
+-    float c = 1.0 / lerp(y_a, 1.0 / c_a, y_b, 1.0 / c_b, yf);
+-    float d = 1.0 / lerp(y_a, 1.0 / d_a, y_b, 1.0 / d_b, yf);
+-
+-    int ht = (hoffset - hcenter) % 1024;
+-    float vty = ((voffset - vcenter) % 1024) + yf;
+-    float originX = (a * ht) + (b * vty) + (hcenter << 8);
++    y_b = y;
++    if(y_a >   1 && isLineMode7(y_a)) y_a--;
++    if(y_b < 239 && isLineMode7(y_b)) y_b++;
++  }
++  #undef isLineMode7
++
++  Line line_a = ppu.lines[y_a];
++  float a_a = (int16)line_a.io.mode7.a;
++  float b_a = (int16)line_a.io.mode7.b;
++  float c_a = (int16)line_a.io.mode7.c;
++  float d_a = (int16)line_a.io.mode7.d;
++
++  Line line_b = ppu.lines[y_b];
++  float a_b = (int16)line_b.io.mode7.a;
++  float b_b = (int16)line_b.io.mode7.b;
++  float c_b = (int16)line_b.io.mode7.c;
++  float d_b = (int16)line_b.io.mode7.d;
++
++  int hcenter = (int13)io.mode7.x;
++  int vcenter = (int13)io.mode7.y;
++  int hoffset = (int13)io.mode7.hoffset;
++  int voffset = (int13)io.mode7.voffset;
++
++  if(io.mode7.vflip) {
++    y_a = 255 - y_a;
++    y_b = 255 - y_b;
++  }
++
++  bool windowAbove[1024];
++  bool windowBelow[1024];
++  renderWindow(self.window, self.window.aboveEnable, windowAbove,
++               ppufast.widescreen(), ppufast.strwin());
++  renderWindow(self.window, self.window.belowEnable, windowBelow,
++               ppufast.widescreen(), ppufast.strwin());
++
++  auto luma = ppu.lightTable[io.displayBrightness];
++  int pixelYp = INT_MIN;
++  for(int ys : range(scale)) {
++    float yf = y + ys * 1.0 / scale - 0.5;
++    if(io.mode7.vflip) yf = 255 - yf;
++
++    float a = 1.0 / lerp(y_a, 1.0 / a_a, y_b, 1.0 / a_b, yf);
++    float b = 1.0 / lerp(y_a, 1.0 / b_a, y_b, 1.0 / b_b, yf);
++    float c = 1.0 / lerp(y_a, 1.0 / c_a, y_b, 1.0 / c_b, yf);
++    float d = 1.0 / lerp(y_a, 1.0 / d_a, y_b, 1.0 / d_b, yf);
++
++    int ht = (hoffset - hcenter) % 1024;
++    float vty = ((voffset - vcenter) % 1024) + yf;
++    float originX = (a * ht) + (b * vty) + (hcenter << 8);
+     float originY = (c * ht) + (d * vty) + (vcenter << 8);
+ 
+-    int pixelXp = INT_MIN;
+-    for(int x : range(256)) {
+-      bool doAbove = self.aboveEnable && !windowAbove[x];
+-      bool doBelow = self.belowEnable && !windowBelow[x];
+-
+-      for(int xs : range(scale)) {
+-        float xf = x + xs * 1.0 / scale - 0.5;
+-        if(io.mode7.hflip) xf = 255 - xf;
+-
+-        int pixelX = (originX + a * xf) / 256;
+-        int pixelY = (originY + c * xf) / 256;
+-
+-        above++;
+-        below++;
+-
+-        //only compute color again when coordinates have changed
+-        if(pixelX != pixelXp || pixelY != pixelYp) {
+-          uint tile    = io.mode7.repeat == 3 && ((pixelX | pixelY) & ~1023) ? 0 : (ppu.vram[(pixelY >> 3 & 127) * 128 + (pixelX >> 3 & 127)] & 0xff);
+-          uint palette = io.mode7.repeat == 2 && ((pixelX | pixelY) & ~1023) ? 0 : (ppu.vram[(((pixelY & 7) << 3) + (pixelX & 7)) + (tile << 6)] >> 8);
+-
+-          uint8 priority;
+-          if(!extbg) {
+-            priority = self.priority[0];
+-          } else {
+-            priority = self.priority[palette >> 7];
+-            palette &= 0x7f;
+-          }
+-          if(!palette) continue;
+-
+-          uint16 color;
+-          if(io.col.directColor && !extbg) {
+-            color = directColor(0, palette);
+-          } else {
+-            color = cgram[palette];
+-          }
+-
+-          pixel = {source, priority, color};
+-          pixelXp = pixelX;
+-          pixelYp = pixelY;
+-        }
+-
+-        if(doAbove && (!extbg || pixel.priority > above->priority)) *above = pixel;
+-        if(doBelow && (!extbg || pixel.priority > below->priority)) *below = pixel;
+-      }
+-    }
++    int pixelXp = INT_MIN;
++    for(int x : range(256+2*ppufast.widescreen())) {
++      x -= ppufast.widescreen();
++      bool doAbove = self.aboveEnable && !windowAbove[ppufast.winXad(x, false)];
++      bool doBelow = self.belowEnable && !windowBelow[ppufast.winXad(x, true)];
++
++      for(int xs : range(scale)) {
++        float xf = x + xs * 1.0 / scale - 0.5;
++        if(io.mode7.hflip) xf = 255 - xf;
++
++        int pixelX = (originX + a * xf) / 256;
++        int pixelY = (originY + c * xf) / 256;
++
++        bool skip = false;
++
++        //only compute color again when coordinates have changed
++        if(pixelX != pixelXp || pixelY != pixelYp) {
++          uint tile    = io.mode7.repeat == 3 && ((pixelX | pixelY) & ~1023) ? 0 : (ppu.vram[(pixelY >> 3 & 127) * 128 + (pixelX >> 3 & 127)] & 0xff);
++          uint palette = io.mode7.repeat == 2 && ((pixelX | pixelY) & ~1023) ? 0 : (ppu.vram[(((pixelY & 7) << 3) + (pixelX & 7)) + (tile << 6)] >> 8);
++
++          uint8 priority;
++          if(!extbg) {
++            priority = self.priority[0];
++          } else {
++            priority = self.priority[palette >> 7];
++            palette &= 0x7f;
++          }
++          skip = !palette;
++
++          if(!skip) {
++            uint32 color;
++            if(io.col.directColor && !extbg) {
++              color = directColor(0, palette);
++            } else {
++              color = cgram[palette];
++            }
++
++            color = luma[color];
++
++            pixel = {source, priority, color};
++            pixelXp = pixelX;
++            pixelYp = pixelY;
++          }
++        }
++
++        if(mosSing) {
++          if(self.aboveEnable && !windowAbove[ppufast.winXad(x, false)]) plotAbove(x, pixel.source, pixel.priority, pixel.color);
++          if(self.belowEnable && !windowBelow[ppufast.winXad(x, true)]) plotBelow(x, pixel.source, pixel.priority, pixel.color);
++        } else
++        if(sampScale == 1) {
++          if(!skip && doAbove && (!extbg || pixel.priority > above->priority)) *above = pixel;
++          if(!skip && doBelow && (!extbg || pixel.priority > below->priority)) *below = pixel;
++          above++;
++          below++;
++        } else {
++          int p = ((((x+ppufast.widescreen())*(scale/sampScale)) + (xs/sampScale))) * 4;
++          sampTmp[p] += pixel.priority;
++          sampTmp[p+1] += (pixel.color >> 16) & 255;
++          sampTmp[p+2] += (pixel.color >>  8) & 255;
++          sampTmp[p+3] += (pixel.color >>  0) & 255;
++          if((ys+1) % sampScale == 0 && (xs+1) % sampScale == 0) {
++            uint8 priority = sampTmp[p] / sampScale / sampScale;
++            uint32 color = ((sampTmp[p+1] / sampScale / sampScale) << 16)
++                         + ((sampTmp[p+2] / sampScale / sampScale) <<  8)
++                         + ((sampTmp[p+3] / sampScale / sampScale) <<  0);
++            if(!skip && doAbove && (!extbg || priority > above->priority)) *above = {source, priority, color};
++            if(!skip && doBelow && (!extbg || priority > below->priority)) *below = {source, priority, color};
++            above++;
++            below++;
++            sampTmp[p] = 0;
++            sampTmp[p+1] = 0;
++            sampTmp[p+2] = 0;
++            sampTmp[p+3] = 0;
++          }
++        }
++        
++      }
++    }
+   }
+-
+-  if(ppu.ss()) {
+-    uint divisor = scale * scale;
+-    for(uint p : range(256)) {
+-      uint ab = 0, bb = 0;
+-      uint ag = 0, bg = 0;
+-      uint ar = 0, br = 0;
+-      for(uint y : range(scale)) {
+-        auto above = &this->above[p * scale];
+-        auto below = &this->below[p * scale];
+-        for(uint x : range(scale)) {
+-          uint a = above[x].color;
+-          uint b = below[x].color;
+-          ab += a >>  0 & 31;
+-          ag += a >>  5 & 31;
+-          ar += a >> 10 & 31;
+-          bb += b >>  0 & 31;
+-          bg += b >>  5 & 31;
+-          br += b >> 10 & 31;
+-        }
+-      }
+-      uint16 aboveColor = ab / divisor << 0 | ag / divisor << 5 | ar / divisor << 10;
+-      uint16 belowColor = bb / divisor << 0 | bg / divisor << 5 | br / divisor << 10;
+-      this->above[p] = {source, this->above[p * scale].priority, aboveColor};
+-      this->below[p] = {source, this->below[p * scale].priority, belowColor};
+-    }
+-  }
+-}
+-
+-//interpolation and extrapolation
+-auto PPU::Line::lerp(float pa, float va, float pb, float vb, float pr) -> float {
+-  if(va == vb || pr == pa) return va;
+-  if(pr == pb) return vb;
+-  return va + (vb - va) / (pb - pa) * (pr - pa);
+-}
++  delete[] sampTmp;
++}
++
++//interpolation and extrapolation
++auto PPU::Line::lerp(float pa, float va, float pb, float vb, float pr) -> float {
++  if(va == vb || pr == pa) return va;
++  if(pr == pb) return vb;
++  return va + (vb - va) / (pb - pa) * (pr - pa);
++}
+diff --git a/bsnes/sfc/ppu-fast/object.cpp b/bsnes/sfc/ppu-fast/object.cpp
+index c0456cf43..1fc167a57 100644
+--- a/bsnes/sfc/ppu-fast/object.cpp
++++ b/bsnes/sfc/ppu-fast/object.cpp
+@@ -1,10 +1,15 @@
+ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+   if(!self.aboveEnable && !self.belowEnable) return;
++  if(ppufast.wsobj() == 2) return;
+ 
+-  bool windowAbove[256];
+-  bool windowBelow[256];
+-  renderWindow(self.window, self.window.aboveEnable, windowAbove);
+-  renderWindow(self.window, self.window.belowEnable, windowBelow);
++  uint wsobj = ppufast.wsOverride() ? 3 : ppufast.wsobj();
++
++  bool windowAbove[1024];
++  bool windowBelow[1024];
++  renderWindow(self.window, self.window.aboveEnable, windowAbove,
++               ppufast.widescreen(), ppufast.strwin());
++  renderWindow(self.window, self.window.belowEnable, windowBelow,
++               ppufast.widescreen(), ppufast.strwin());
+ 
+   uint itemCount = 0;
+   uint tileCount = 0;
+@@ -28,7 +33,7 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+       item.height = heights[self.baseSize];
+     }
+ 
+-    if(object.x > 256 && object.x + item.width - 1 < 512) continue;
++    if((wsobj == 0 || wsobj == 3) && object.x > 256 && object.x + item.width - 1 < 512) continue;
+     uint height = item.height >> self.interlace;
+     if((y >= object.y && y < object.y + height)
+     || (object.y + height >= 256 && y < (object.y + height & 255))
+@@ -72,7 +77,7 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+ 
+     for(uint tileX : range(tileWidth)) {
+       uint objectX = x + (tileX << 3) & 511;
+-      if(x != 256 && objectX >= 256 && objectX + 7 < 512) continue;
++      //if(x != 256 && objectX >= 256 && objectX + 7 < 512) continue;
+ 
+       ObjectTile tile{true};
+       tile.x = objectX;
+@@ -83,7 +88,7 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+ 
+       uint mirrorX = !object.hflip ? tileX : tileWidth - 1 - tileX;
+       uint address = tiledataAddress + ((characterY + (characterX + mirrorX & 15)) << 4);
+-      address = (address & 0x7ff0) + (y & 7);
++      address = ppu.vramExt((address & 0xfff0 /*0x7ff0*/) + (y & 7));
+       tile.data  = ppu.vram[address + 0] <<  0;
+       tile.data |= ppu.vram[address + 8] << 16;
+ 
+@@ -95,8 +100,8 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+   ppu.io.obj.rangeOver |= itemCount > ppu.ItemLimit;
+   ppu.io.obj.timeOver  |= tileCount > ppu.TileLimit;
+ 
+-  uint8_t palette[256] = {};
+-  uint8_t priority[256] = {};
++  uint8_t palette[512] = {};//
++  uint8_t priority[512] = {};//
+ 
+   for(uint n : range(ppu.TileLimit)) {
+     auto& tile = tiles[n];
+@@ -105,7 +110,7 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+     uint tileX = tile.x;
+     for(uint x : range(8)) {
+       tileX &= 511;
+-      if(tileX < 256) {
++      //if(tileX < 256) {
+         uint color, shift = tile.hflip ? x : 7 - x;
+         color  = tile.data >> shift +  0 & 1;
+         color += tile.data >> shift +  7 & 2;
+@@ -115,16 +120,33 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+           palette[tileX] = tile.palette + color;
+           priority[tileX] = self.priority[tile.priority];
+         }
+-      }
++      //}
+       tileX++;
+     }
+   }
+ 
+-  for(uint x : range(256)) {
++  auto luma = ppu.lightTable[io.displayBrightness];
++  int wsl = -((int)ppufast.widescreen());
++  int wsr = 256 + ((int)ppufast.widescreen());
++  for(uint x : range(512)) {//
+     if(!priority[x]) continue;
+     uint8 source = palette[x] < 192 ? Source::OBJ1 : Source::OBJ2;
+-    if(self.aboveEnable && !windowAbove[x]) plotAbove(x, source, priority[x], cgram[palette[x]]);
+-    if(self.belowEnable && !windowBelow[x]) plotBelow(x, source, priority[x], cgram[palette[x]]);
++    int xc = x;//
++    if(xc > 352) xc -= 512;
++    if(xc < wsl || xc >= wsr || (wsobj == 3 && (xc < 0 || xc >= 256))) continue;
++
++    uint32 mctc = luma[cgram[palette[x]]];
++    
++    if(ppufast.hires() && ppufast.hd()) {
++      // Match non-hires backgrounds in hires mode (see background)
++      if(self.aboveEnable && !windowAbove[ppufast.winXad(xc, false)]) plotHD(above, xc, source, priority[x], mctc, true, false);
++      if(self.aboveEnable && !windowAbove[ppufast.winXad(xc, false)]) plotHD(above, xc, source, priority[x], mctc, true, true);
++      if(self.aboveEnable && !windowAbove[ppufast.winXad(xc, false)]) plotHD(below, xc, source, priority[x], mctc, true, false);
++      if(self.aboveEnable && !windowAbove[ppufast.winXad(xc, false)]) plotHD(below, xc, source, priority[x], mctc, true, true);
++    } else {
++      if(self.aboveEnable && !windowAbove[ppufast.winXad(xc, false)]) plotAbove(xc, source, priority[x], mctc);
++      if(self.belowEnable && !windowBelow[ppufast.winXad(xc, true)])  plotBelow(xc, source, priority[x], mctc);
++    }
+   }
+ }
+ 
+@@ -142,7 +164,7 @@ auto PPU::readObject(uint10 address) -> uint8 {
+     uint n = address >> 2;  //object#
+     address &= 3;
+     if(address == 0) return objects[n].x;
+-    if(address == 1) return objects[n].y - 1;  //-1 => rendering happens one scanline late
++    if(address == 1) return objects[n].y - 1;
+     if(address == 2) return objects[n].character;
+     return (
+       objects[n].nameselect << 0
+diff --git a/bsnes/sfc/ppu-fast/ppu.cpp b/bsnes/sfc/ppu-fast/ppu.cpp
+index 718a63384..0ecdd2035 100644
+--- a/bsnes/sfc/ppu-fast/ppu.cpp
++++ b/bsnes/sfc/ppu-fast/ppu.cpp
+@@ -25,32 +25,55 @@ auto PPU::hd() const -> bool { return latch.hd; }
+ auto PPU::ss() const -> bool { return latch.ss; }
+ #undef ppu
+ auto PPU::hdScale() const -> uint { return configuration.hacks.ppu.mode7.scale; }
+-auto PPU::hdPerspective() const -> bool { return configuration.hacks.ppu.mode7.perspective; }
+-auto PPU::hdSupersample() const -> bool { return configuration.hacks.ppu.mode7.supersample; }
+-auto PPU::hdMosaic() const -> bool { return configuration.hacks.ppu.mode7.mosaic; }
++auto PPU::hdPerspective() const -> uint { return configuration.hacks.ppu.mode7.perspective; }
++auto PPU::hdSupersample() const -> uint {
++  uint factor = configuration.hacks.ppu.mode7.ssFactor;
++  if(factor < 1) factor = 1;
++  // Official Mode7/Supersample is a boolean: sample at Scale and output 1x.
++  // When that is on and the hd factor is unused (1), use Scale as the factor.
++  if(configuration.hacks.ppu.mode7.supersample && factor == 1) {
++    uint scale = hdScale();
++    return scale < 1 ? 1 : scale;
++  }
++  return factor;
++}
++auto PPU::hdMosaic() const -> uint { return configuration.hacks.ppu.mode7.mosaic; }
++auto PPU::widescreen() const -> uint { return wsExt; }
++auto PPU::widescreenRaw() const -> uint { return !hd() || configuration.hacks.ppu.mode7.wsMode == 0 ? 0 : configuration.hacks.ppu.mode7.widescreen; }
++auto PPU::wsbg(uint bg) const -> uint {
++  if (bg == Source::BG1) return configuration.hacks.ppu.mode7.wsbg1;
++  if (bg == Source::BG2) return configuration.hacks.ppu.mode7.wsbg2;
++  if (bg == Source::BG3) return configuration.hacks.ppu.mode7.wsbg3;
++  if (bg == Source::BG4) return configuration.hacks.ppu.mode7.wsbg4;
++  return 0; }
++auto PPU::wsobj() const -> uint { return configuration.hacks.ppu.mode7.wsobj; }
++auto PPU::winXad(uint x, bool bel) const -> uint {
++  return ((configuration.hacks.ppu.mode7.igwin != 0 && (configuration.hacks.ppu.mode7.igwin >= 3
++       || configuration.hacks.ppu.mode7.igwin >= 2 && ((bel ? io.col.window.belowMask : io.col.window.aboveMask) == 0)
++       || configuration.hacks.ppu.mode7.igwin >= 1 && ((bel ? io.col.window.belowMask : io.col.window.aboveMask) == 2)))
++    ? configuration.hacks.ppu.mode7.igwinx : x) + widescreen(); }
++auto PPU::winXadHd(uint x, bool bel) const -> uint {
++  return (configuration.hacks.ppu.mode7.igwin != 0 && (configuration.hacks.ppu.mode7.igwin >= 3
++       || configuration.hacks.ppu.mode7.igwin >= 2 && ((bel ? io.col.window.belowMask : io.col.window.aboveMask) == 0)
++       || configuration.hacks.ppu.mode7.igwin >= 1 && ((bel ? io.col.window.belowMask : io.col.window.aboveMask) == 2)))
++    ? configuration.hacks.ppu.mode7.igwinx * PPU::hdScale() : x; }
++auto PPU::strwin() const -> bool { return configuration.hacks.ppu.mode7.strwin; }
++auto PPU::vramExt(uint addr) const -> uint { return addr & configuration.hacks.ppu.mode7.vramExt; }
++auto PPU::bgGrad() const -> uint { return !hd() ? 0 : configuration.hacks.ppu.mode7.bgGrad; }
++auto PPU::windRad() const -> uint { return !hd() ? 0 : configuration.hacks.ppu.mode7.windRad; }
++auto PPU::wsOverrideCandidate() const -> bool { return configuration.hacks.ppu.mode7.wsMode == 1; }
++auto PPU::wsOverride() const -> bool { return mode7LineGroups.count < 1 && wsOverrideCandidate(); }
++auto PPU::wsBgCol() const -> bool { return configuration.hacks.ppu.mode7.wsBgCol == 2
++                                            || configuration.hacks.ppu.mode7.wsBgCol == 1 && wsOverride(); }
++auto PPU::wsMarker() const -> uint { return configuration.hacks.ppu.mode7.wsMarker; }
++auto PPU::wsMarkerAlpha() const -> uint { return configuration.hacks.ppu.mode7.wsMarkerAlpha; }
+ auto PPU::deinterlace() const -> bool { return configuration.hacks.ppu.deinterlace; }
+ auto PPU::renderCycle() const -> uint { return configuration.hacks.ppu.renderCycle; }
+ auto PPU::noVRAMBlocking() const -> bool { return configuration.hacks.ppu.noVRAMBlocking; }
+ #define ppu ppufast
+ 
+ PPU::PPU() {
+-  output = new uint16_t[2304 * 2160]();
+-
+-  for(uint l : range(16)) {
+-    lightTable[l] = new uint16_t[32768];
+-    for(uint r : range(32)) {
+-      for(uint g : range(32)) {
+-        for(uint b : range(32)) {
+-          double luma = (double)l / 15.0;
+-          uint ar = (luma * r + 0.5);
+-          uint ag = (luma * g + 0.5);
+-          uint ab = (luma * b + 0.5);
+-          lightTable[l][r << 10 | g << 5 | b << 0] = ab << 10 | ag << 5 | ar << 0;
+-        }
+-      }
+-    }
+-  }
+-
++  output = new uint32_t[256 * 61440]();
+   for(uint y : range(240)) {
+     lines[y].y = y;
+   }
+@@ -122,9 +145,9 @@ auto PPU::scanline() -> void {
+ 
+   if(vcounter() > 0 && vcounter() < vdisp()) {
+     latch.hires |= io.pseudoHires || io.bgMode == 5 || io.bgMode == 6;
+-    //supersampling and EXTBG mode are not compatible, so disable supersampling in EXTBG mode
+-    latch.hd |= io.bgMode == 7 && hdScale() > 1 && (hdSupersample() == 0 || io.extbg == 1);
+-    latch.ss |= io.bgMode == 7 && hdScale() > 1 && (hdSupersample() == 1 && io.extbg == 0);
++    //supersampling and EXTBG mode are not compatible, so disable supersampling in EXTBG mode //HD:disabled
++    latch.hd |= /* io.bgMode == 7 && */ hdScale() > 0 /*&& (hdSupersample() == 0*/ /* || io.extbg == 1 */ /*)*/; //HD:deactivated dynamic scale switching for widescreen
++    latch.ss |= /* io.bgMode == 7 && */ hdScale() > 0 && (configuration.hacks.ppu.mode7.supersample || hdSupersample() > 1 /* && io.extbg == 0 */ );
+   }
+ 
+   if(vcounter() == vdisp()) {
+@@ -145,8 +168,8 @@ auto PPU::refresh() -> void {
+       width  = 256 << hires();
+       height = 240 << interlace();
+     } else {
+-      pitch  = 256 * hdScale();
+-      width  = 256 * hdScale();
++      pitch  = (256+2*widescreen()) * hdScale();
++      width  = (256+2*widescreen()) * hdScale();
+       height = 240 * hdScale();
+     }
+ 
+@@ -157,12 +180,14 @@ auto PPU::refresh() -> void {
+         if(y >= 8 && y <= 230) continue;  //these scanlines are always rendered.
+         auto output = this->output + (!hd() ? (y * 1024 + (interlace() && field() ? 512 : 0)) : (y * 256 * hdScale() * hdScale()));
+         auto width = (!hd() ? (!hires() ? 256 : 512) : (256 * hdScale() * hdScale()));
+-        memory::fill<uint16>(output, width);
++        memory::fill<uint32>(output, width);
+       }
+     }
+ 
+-    if(auto device = controllerPort2.device) device->draw(output, pitch * sizeof(uint16), width, height);
+-    platform->videoFrame(output, pitch * sizeof(uint16), width, height, hd() ? hdScale() : 1);
++    if(auto device = controllerPort2.device) {
++      if(!hd()) device->draw((uint16*)output, pitch * sizeof(uint16), width, height);
++    }
++    platform->videoFrame((const uint32*)output, pitch * sizeof(uint32), width, height, hd() ? hdScale() : 1);
+ 
+     frame.pitch  = pitch;
+     frame.width  = width;
+@@ -177,7 +202,7 @@ auto PPU::load() -> bool {
+ 
+ auto PPU::power(bool reset) -> void {
+   PPUcounter::reset();
+-  memory::fill<uint16>(output, 1024 * 960);
++  memory::fill<uint16>(output, 256 * 61440);
+ 
+   function<uint8 (uint, uint8)> reader{&PPU::readIO, this};
+   function<void  (uint, uint8)> writer{&PPU::writeIO, this};
+diff --git a/bsnes/sfc/ppu-fast/ppu.hpp b/bsnes/sfc/ppu-fast/ppu.hpp
+index 2ef93c422..b4a71c011 100644
+--- a/bsnes/sfc/ppu-fast/ppu.hpp
++++ b/bsnes/sfc/ppu-fast/ppu.hpp
+@@ -3,7 +3,6 @@
+ //limitations:
+ //* mid-scanline effects not support
+ //* vertical mosaic coordinates are not exact
+-//* (hardware-mod) 128KB VRAM mode not supported
+ 
+ #define PPU PPUfast
+ 
+@@ -15,9 +14,24 @@ struct PPU : PPUcounter {
+   alwaysinline auto hd() const -> bool;
+   alwaysinline auto ss() const -> bool;
+   alwaysinline auto hdScale() const -> uint;
+-  alwaysinline auto hdPerspective() const -> bool;
+-  alwaysinline auto hdSupersample() const -> bool;
+-  alwaysinline auto hdMosaic() const -> bool;
++  alwaysinline auto hdPerspective() const -> uint;
++  alwaysinline auto hdSupersample() const -> uint;
++  alwaysinline auto hdMosaic() const -> uint;
++  alwaysinline auto widescreen() const -> uint;
++  alwaysinline auto widescreenRaw() const -> uint;
++  alwaysinline auto wsbg(uint bg) const -> uint;
++  alwaysinline auto wsobj() const -> uint;
++  alwaysinline auto winXad(uint x, bool bel) const -> uint;
++  alwaysinline auto winXadHd(uint x, bool bel) const -> uint;
++  alwaysinline auto strwin() const -> bool;
++  alwaysinline auto vramExt(uint addr) const -> uint;
++  alwaysinline auto bgGrad() const -> uint;
++  alwaysinline auto windRad() const -> uint;
++  alwaysinline auto wsOverrideCandidate() const -> bool;
++  alwaysinline auto wsOverride() const -> bool;
++  alwaysinline auto wsBgCol() const -> bool;
++  alwaysinline auto wsMarker() const -> uint;
++  alwaysinline auto wsMarkerAlpha() const -> uint;
+   alwaysinline auto deinterlace() const -> bool;
+   alwaysinline auto renderCycle() const -> uint;
+   alwaysinline auto noVRAMBlocking() const -> bool;
+@@ -246,7 +260,7 @@ public:
+   struct Pixel {
+     uint8 source = 0;
+     uint8 priority = 0;
+-    uint16 color = 0;
++    uint32 color = 0;
+   };
+ 
+   //io.cpp
+@@ -273,13 +287,18 @@ public:
+   Latch latch;
+   IO io;
+ 
+-  uint16 vram[32 * 1024] = {};
++  uint16 vram[32 * 1024 * 2] = {}; //0-ffff
+   uint16 cgram[256] = {};
+   Object objects[128] = {};
+ 
+   //[unserialized]
+-  uint16* output = {};
+-  uint16* lightTable[16] = {};
++  uint32* output = {};
++  uint32* lightTable[16] = {};
++  uint luminance = 222;
++  uint saturation = 222;
++  uint gamma = 222;
++  uint wsExt = 0;
++
+ 
+   uint ItemLimit = 0;
+   uint TileLimit = 0;
+@@ -290,16 +309,20 @@ public:
+     static auto flush() -> void;
+     auto cache() -> void;
+     auto render(bool field) -> void;
+-    auto pixel(uint x, Pixel above, Pixel below) const -> uint16;
+-    auto blend(uint x, uint y, bool halve) const -> uint16;
+-    alwaysinline auto directColor(uint paletteIndex, uint paletteColor) const -> uint16;
+-    alwaysinline auto plotAbove(uint x, uint8 source, uint8 priority, uint16 color) -> void;
+-    alwaysinline auto plotBelow(uint x, uint8 source, uint8 priority, uint16 color) -> void;
+-    alwaysinline auto plotHD(Pixel*, uint x, uint8 source, uint8 priority, uint16 color, bool hires, bool subpixel) -> void;
++
++    alwaysinline auto pixel(uint x, Pixel above, Pixel below, uint ws, uint wsm,
++                            uint wsma, uint32 bgFixedColor) const -> uint32;
++    alwaysinline auto blend(uint x, uint y, bool halve) const -> uint32;
++    alwaysinline auto directColor(uint paletteIndex, uint paletteColor) const -> uint32;
++    alwaysinline auto plotAbove(int x, uint8 source, uint8 priority, uint32 color) -> void;
++    alwaysinline auto plotBelow(int x, uint8 source, uint8 priority, uint32 color) -> void;
++    alwaysinline auto plotHD(Pixel*, int x, uint8 source, uint8 priority, uint32 color, bool hires, bool subpixel) -> void;
++
++    alwaysinline auto avgBgC(uint dist, uint offset) const -> uint32;
+ 
+     //background.cpp
+     auto renderBackground(PPU::IO::Background&, uint8 source) -> void;
+-    auto getTile(PPU::IO::Background&, uint hoffset, uint voffset) -> uint;
++    alwaysinline auto getTile(PPU::IO::Background&, uint hoffset, uint voffset) -> uint;
+ 
+     //mode7.cpp
+     auto renderMode7(PPU::IO::Background&, uint8 source) -> void;
+@@ -309,21 +332,15 @@ public:
+     auto renderMode7HD(PPU::IO::Background&, uint8 source) -> void;
+     alwaysinline auto lerp(float pa, float va, float pb, float vb, float pr) -> float;
+ 
+-    //mode7hd-avx2.cpp
+-    auto renderMode7HD_AVX2(
+-      PPU::IO::Background&, uint8 source,
+-      Pixel* above, Pixel* below,
+-      bool* windowAbove, bool* windowBelow,
+-      float originX, float a,
+-      float originY, float c
+-    ) -> void;
+-
+     //object.cpp
+     auto renderObject(PPU::IO::Object&) -> void;
+ 
+     //window.cpp
+-    auto renderWindow(PPU::IO::WindowLayer&, bool enable, bool output[256]) -> void;
+-    auto renderWindow(PPU::IO::WindowColor&, uint mask,   bool output[256]) -> void;
++    alwaysinline auto renderWindow(PPU::IO::WindowLayer&, bool enable,
++                                   bool output[1024], uint ws, bool stretch) -> void;
++    alwaysinline auto renderWindow(PPU::IO::WindowColor&, uint mask, bool *output,
++                                   int oneLeft, int oneRight, int twoLeft, int twoRight,
++                                   uint scale, uint offset, uint ws) -> void;
+ 
+   //unserialized:
+     uint y;  //constant
+@@ -335,11 +352,11 @@ public:
+     ObjectItem items[128];  //32 on real hardware
+     ObjectTile tiles[128];  //34 on real hardware; 1024 max (128 * 64-width tiles)
+ 
+-    Pixel above[256 * 9 * 9];
+-    Pixel below[256 * 9 * 9];
++    Pixel *above = new Pixel[61440];
++    Pixel *below = new Pixel[61440];
+ 
+-    bool windowAbove[256];
+-    bool windowBelow[256];
++    bool *windowAbove = new bool[61440] ;
++    bool *windowBelow = new bool[61440] ;
+ 
+     //flush()
+     static uint start;
+@@ -358,10 +375,10 @@ public:
+ 
+   struct Mode7LineGroups {
+     int count = -1;
+-    int startLine[32];
+-    int endLine[32];
+-    int startLerpLine[32];
+-    int endLerpLine[32];
++    int startLine[240];
++    int endLine[240];
++    int startLerpLine[240];
++    int endLerpLine[240];
+   } mode7LineGroups;
+ };
+ 
+diff --git a/bsnes/sfc/ppu-fast/window.cpp b/bsnes/sfc/ppu-fast/window.cpp
+index 1794b9997..b958b0b7f 100644
+--- a/bsnes/sfc/ppu-fast/window.cpp
++++ b/bsnes/sfc/ppu-fast/window.cpp
+@@ -1,28 +1,74 @@
+-auto PPU::Line::renderWindow(PPU::IO::WindowLayer& self, bool enable, bool output[256]) -> void {
++auto PPU::Line::renderWindow(PPU::IO::WindowLayer& self, bool enable,
++                             bool output[1024], uint ws, bool stretch) -> void {
++  uint width = 256 + 2 * ws;
+   if(!enable || (!self.oneEnable && !self.twoEnable)) {
+-    memory::fill<bool>(output, 256, 0);
++    memory::fill<bool>(output, width, 0);
+     return;
+   }
+ 
++  int oneLeft  = io.window.oneLeft;
++  int oneRight = io.window.oneRight;
++  if (stretch) {
++    oneLeft  = (oneLeft  << 1) - 128 + ws;
++    oneRight = (oneRight << 1) - 128 + ws;
++  } else {
++    if (oneLeft == 0) {
++      oneLeft = -1;
++    } else if (oneLeft == 255) {
++      oneLeft = width;
++    } else  {
++      oneLeft += ws;
++    }
++    if (oneRight == 0) {
++      oneRight = -1;
++    } else if (oneRight == 255) {
++      oneRight = width;
++    } else  {
++      oneRight += ws;
++    } 
++  }
++
+   if(self.oneEnable && !self.twoEnable) {
+     bool set = 1 ^ self.oneInvert, clear = !set;
+-    for(uint x : range(256)) {
+-      output[x] = x >= io.window.oneLeft && x <= io.window.oneRight ? set : clear;
++    for(int x : range(width)) {
++      output[x] = x >= oneLeft && x <= oneRight ? set : clear;
+     }
+     return;
+   }
+ 
++  int twoLeft  = io.window.twoLeft;
++  int twoRight = io.window.twoRight;
++  if (stretch) {
++    twoLeft  = (twoLeft  << 1) - 128 + ws;
++    twoRight = (twoRight << 1) - 128 + ws;
++  } else { // extend edges
++    if (twoLeft == 0) {
++      twoLeft = -1;
++    } else if (twoLeft == 255) {
++      twoLeft = width;
++    } else  {
++      twoLeft += ws;
++    }
++    if (twoRight == 0) {
++      twoRight = -1;
++    } else if (twoRight == 255) {
++      twoRight = width;
++    } else  {
++      twoRight += ws;
++    } 
++  }
++
+   if(self.twoEnable && !self.oneEnable) {
+     bool set = 1 ^ self.twoInvert, clear = !set;
+-    for(uint x : range(256)) {
+-      output[x] = x >= io.window.twoLeft && x <= io.window.twoRight ? set : clear;
++    for(int x : range(width)) {
++      output[x] = x >= twoLeft && x <= twoRight ? set : clear;
+     }
+     return;
+   }
+ 
+-  for(uint x : range(256)) {
+-    bool oneMask = (x >= io.window.oneLeft && x <= io.window.oneRight) ^ self.oneInvert;
+-    bool twoMask = (x >= io.window.twoLeft && x <= io.window.twoRight) ^ self.twoInvert;
++  for(int x : range(width)) {
++    bool oneMask = (x >= oneLeft && x <= oneRight) ^ self.oneInvert;
++    bool twoMask = (x >= twoLeft && x <= twoRight) ^ self.twoInvert;
+     switch(self.mask) {
+     case 0: output[x] = (oneMask | twoMask) == 1; break;
+     case 1: output[x] = (oneMask & twoMask) == 1; break;
+@@ -32,44 +78,47 @@ auto PPU::Line::renderWindow(PPU::IO::WindowLayer& self, bool enable, bool outpu
+   }
+ }
+ 
+-auto PPU::Line::renderWindow(PPU::IO::WindowColor& self, uint mask, bool output[256]) -> void {
++auto PPU::Line::renderWindow(PPU::IO::WindowColor& self, uint mask, bool *output,
++                             int oneLeft, int oneRight, int twoLeft, int twoRight,
++                             uint scale, uint offset, uint ws) -> void {
++  uint width = 256 + 2 * ws;
+   bool set, clear;
+   switch(mask) {
+-  case 0: memory::fill<bool>(output, 256, 1); return;  //always
++  case 0: memory::fill<bool>(output, width * scale * scale, 1); return;  //always
+   case 1: set = 1, clear = 0; break;  //inside
+   case 2: set = 0, clear = 1; break;  //outside
+-  case 3: memory::fill<bool>(output, 256, 0); return;  //never
++  case 3: memory::fill<bool>(output, width * scale * scale, 0); return;  //never
+   }
+ 
+   if(!self.oneEnable && !self.twoEnable) {
+-    memory::fill<bool>(output, 256, clear);
++    memory::fill<bool>(output, width * scale * scale, clear);
+     return;
+   }
+ 
+   if(self.oneEnable && !self.twoEnable) {
+     if(self.oneInvert) set ^= 1, clear ^= 1;
+-    for(uint x : range(256)) {
+-      output[x] = x >= io.window.oneLeft && x <= io.window.oneRight ? set : clear;
++    for(int x : range(width * scale)) {
++      output[x+offset] = x >= oneLeft && x <= oneRight ? set : clear;
+     }
+     return;
+   }
+ 
+   if(self.twoEnable && !self.oneEnable) {
+     if(self.twoInvert) set ^= 1, clear ^= 1;
+-    for(uint x : range(256)) {
+-      output[x] = x >= io.window.twoLeft && x <= io.window.twoRight ? set : clear;
++    for(int x : range(width * scale)) {
++      output[x+offset] = x >= twoLeft && x <= twoRight ? set : clear;
+     }
+     return;
+   }
+ 
+-  for(uint x : range(256)) {
+-    bool oneMask = (x >= io.window.oneLeft && x <= io.window.oneRight) ^ self.oneInvert;
+-    bool twoMask = (x >= io.window.twoLeft && x <= io.window.twoRight) ^ self.twoInvert;
++  for(int x : range(width * scale)) {
++    bool oneMask = (x >= oneLeft && x <= oneRight) ^ self.oneInvert;
++    bool twoMask = (x >= twoLeft && x <= twoRight) ^ self.twoInvert;
+     switch(self.mask) {
+-    case 0: output[x] = (oneMask | twoMask) == 1 ? set : clear; break;
+-    case 1: output[x] = (oneMask & twoMask) == 1 ? set : clear; break;
+-    case 2: output[x] = (oneMask ^ twoMask) == 1 ? set : clear; break;
+-    case 3: output[x] = (oneMask ^ twoMask) == 0 ? set : clear; break;
++    case 0: output[x+offset] = (oneMask | twoMask) == 1 ? set : clear; break;
++    case 1: output[x+offset] = (oneMask & twoMask) == 1 ? set : clear; break;
++    case 2: output[x+offset] = (oneMask ^ twoMask) == 1 ? set : clear; break;
++    case 3: output[x+offset] = (oneMask ^ twoMask) == 0 ? set : clear; break;
+     }
+   }
+ }
+diff --git a/bsnes/target-bsnes/input/hotkeys.cpp b/bsnes/target-bsnes/input/hotkeys.cpp
+index f3fb97e7e..ec53b1dd1 100644
+--- a/bsnes/target-bsnes/input/hotkeys.cpp
++++ b/bsnes/target-bsnes/input/hotkeys.cpp
+@@ -144,7 +144,10 @@ auto InputManager::bindHotkeys() -> void {
+   }));
+ 
+   hotkeys.append(InputHotkey("Toggle Supersampling").onPress([] {
+-    enhancementSettings.mode7Supersample.setChecked(!enhancementSettings.mode7Supersample.checked()).doToggle();
++    auto& combo = enhancementSettings.mode7Supersample;
++    uint index = (combo.selected().offset() + 1) % combo.itemCount();
++    combo.item(index).setSelected();
++    combo.doChange();
+   }));
+ 
+   hotkeys.append(InputHotkey("Reset Emulation").onPress([] {
+diff --git a/bsnes/target-bsnes/program/game.cpp b/bsnes/target-bsnes/program/game.cpp
+index b83a97528..8634ab229 100644
+--- a/bsnes/target-bsnes/program/game.cpp
++++ b/bsnes/target-bsnes/program/game.cpp
+@@ -13,7 +13,22 @@ auto Program::load() -> void {
+   emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);
+   emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
+   emulator->configure("Hacks/PPU/Mode7/Supersample", settings.emulator.hack.ppu.mode7.supersample);
++  emulator->configure("Hacks/PPU/Mode7/SsFactor", settings.emulator.hack.ppu.mode7.ssFactor);
+   emulator->configure("Hacks/PPU/Mode7/Mosaic", settings.emulator.hack.ppu.mode7.mosaic);
++  emulator->configure("Hacks/PPU/Mode7/Widescreen", settings.emulator.hack.ppu.mode7.widescreen);
++  emulator->configure("Hacks/PPU/Mode7/Wsbg1", settings.emulator.hack.ppu.mode7.wsbg1);
++  emulator->configure("Hacks/PPU/Mode7/Wsbg2", settings.emulator.hack.ppu.mode7.wsbg2);
++  emulator->configure("Hacks/PPU/Mode7/Wsbg3", settings.emulator.hack.ppu.mode7.wsbg3);
++  emulator->configure("Hacks/PPU/Mode7/Wsbg4", settings.emulator.hack.ppu.mode7.wsbg4);
++  emulator->configure("Hacks/PPU/Mode7/Wsobj", settings.emulator.hack.ppu.mode7.wsobj);
++  emulator->configure("Hacks/PPU/Mode7/Igwin", settings.emulator.hack.ppu.mode7.igwin);
++  emulator->configure("Hacks/PPU/Mode7/Igwinx", settings.emulator.hack.ppu.mode7.igwinx);
++  emulator->configure("Hacks/PPU/Mode7/BgGrad", settings.emulator.hack.ppu.mode7.bgGrad);
++  emulator->configure("Hacks/PPU/Mode7/WindRad", settings.emulator.hack.ppu.mode7.windRad);
++  emulator->configure("Hacks/PPU/Mode7/WsMode", settings.emulator.hack.ppu.mode7.wsMode);
++  emulator->configure("Hacks/PPU/Mode7/WsBgCol", settings.emulator.hack.ppu.mode7.wsBgCol);
++  emulator->configure("Hacks/PPU/Mode7/WsMarker", settings.emulator.hack.ppu.mode7.wsMarker);
++  emulator->configure("Hacks/PPU/Mode7/WsMarkerAlpha", settings.emulator.hack.ppu.mode7.wsMarkerAlpha);
+   emulator->configure("Hacks/DSP/Fast", settings.emulator.hack.dsp.fast);
+   emulator->configure("Hacks/DSP/Cubic", settings.emulator.hack.dsp.cubic);
+   emulator->configure("Hacks/DSP/EchoShadow", settings.emulator.hack.dsp.echoShadow);
+diff --git a/bsnes/target-bsnes/program/hacks.cpp b/bsnes/target-bsnes/program/hacks.cpp
+index b37507039..5b03f65fe 100644
+--- a/bsnes/target-bsnes/program/hacks.cpp
++++ b/bsnes/target-bsnes/program/hacks.cpp
+@@ -1,5 +1,6 @@
+ auto Program::hackCompatibility() -> void {
+   string entropy = settings.emulator.hack.entropy;
++  bool fastJoypadPolling = false;
+   bool fastPPU = settings.emulator.hack.ppu.fast;
+   bool fastPPUNoSpriteLimit = settings.emulator.hack.ppu.noSpriteLimit;
+   bool fastDSP = settings.emulator.hack.dsp.fast;
+@@ -9,6 +10,15 @@ auto Program::hackCompatibility() -> void {
+   auto title = superFamicom.title;
+   auto region = superFamicom.region;
+ 
++  //sometimes menu options are skipped over in the main menu with cycle-based joypad polling
++  if(title == "Arcades Greatest Hits") fastJoypadPolling = true;
++
++  //the start button doesn't work in this game with cycle-based joypad polling
++  if(title == "TAIKYOKU-IGO Goliath") fastJoypadPolling = true;
++
++  //holding up or down on the menu quickly cycles through options instead of stopping after each button press
++  if(title == "WORLD MASTERS GOLF") fastJoypadPolling = true;
++
+   //relies on mid-scanline rendering techniques
+   if(title == "AIR STRIKE PATROL" || title == "DESERT FIGHTER") fastPPU = false;
+ 
+@@ -57,16 +67,154 @@ auto Program::hackCompatibility() -> void {
+   }
+ 
+   emulator->configure("Hacks/Entropy", entropy);
++  emulator->configure("Hacks/CPU/FastJoypadPolling", fastJoypadPolling);
+   emulator->configure("Hacks/PPU/Fast", fastPPU);
+   emulator->configure("Hacks/PPU/NoSpriteLimit", fastPPUNoSpriteLimit);
+   emulator->configure("Hacks/PPU/RenderCycle", renderCycle);
+-  emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);
+-  emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
++  emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);	
++  emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);	
++  emulator->configure("Hacks/PPU/Mode7/Widescreen", settings.emulator.hack.ppu.mode7.widescreen);	
++  emulator->configure("Hacks/PPU/Mode7/Wsbg1", settings.emulator.hack.ppu.mode7.wsbg1);	
++  emulator->configure("Hacks/PPU/Mode7/Wsbg2", settings.emulator.hack.ppu.mode7.wsbg2);	
++  emulator->configure("Hacks/PPU/Mode7/Wsbg3", settings.emulator.hack.ppu.mode7.wsbg3);	
++  emulator->configure("Hacks/PPU/Mode7/Wsbg4", settings.emulator.hack.ppu.mode7.wsbg4);	
++  emulator->configure("Hacks/PPU/Mode7/Wsobj", settings.emulator.hack.ppu.mode7.wsobj);	
++  emulator->configure("Hacks/PPU/Mode7/Igwin", settings.emulator.hack.ppu.mode7.igwin);	
++  emulator->configure("Hacks/PPU/Mode7/Igwinx", settings.emulator.hack.ppu.mode7.igwinx);	
++  emulator->configure("Hacks/PPU/Mode7/Strwin", false);
++  emulator->configure("Hacks/PPU/Mode7/VramExt", 0x7fff);
++  emulator->configure("Hacks/PPU/Mode7/BgGrad", settings.emulator.hack.ppu.mode7.bgGrad);	
++  emulator->configure("Hacks/PPU/Mode7/WindRad", settings.emulator.hack.ppu.mode7.windRad);	
++  emulator->configure("Hacks/PPU/Mode7/WsMode", settings.emulator.hack.ppu.mode7.wsMode);	
++  emulator->configure("Hacks/PPU/Mode7/WsBgCol", settings.emulator.hack.ppu.mode7.wsBgCol);	
++  emulator->configure("Hacks/PPU/Mode7/WsMarker", settings.emulator.hack.ppu.mode7.wsMarker);	
++  emulator->configure("Hacks/PPU/Mode7/WsMarkerAlpha", settings.emulator.hack.ppu.mode7.wsMarkerAlpha);	
+   emulator->configure("Hacks/PPU/Mode7/Supersample", settings.emulator.hack.ppu.mode7.supersample);
++  emulator->configure("Hacks/PPU/Mode7/SsFactor", settings.emulator.hack.ppu.mode7.ssFactor);
+   emulator->configure("Hacks/PPU/Mode7/Mosaic", settings.emulator.hack.ppu.mode7.mosaic);
+   emulator->configure("Hacks/DSP/Fast", fastDSP);
+   emulator->configure("Hacks/DSP/Cubic", settings.emulator.hack.dsp.cubic);
+   emulator->configure("Hacks/Coprocessor/DelayedSync", coprocessorDelayedSync);
++
++  if(rso) {
++    int i = 0;
++    int v = 0;
++    int c = -1;
++    int n = 0;
++    bool e = true;
++    while (i < rso.size()) {
++      v = rso[i++];
++      if (v == '%') {
++        e = !e;
++      }
++      if (!e) {
++        continue;
++      }
++      if ((v >= 'a' && v <= 'z') || (v >= 'A' && v <= 'Z')) {
++        c = v;
++      } else if (c > -1 && v >= '0' && v <= '9') {
++        n = (n * 10) + (v - '0');
++        if (i == rso.size() || rso[i] < '0' || rso[i] > '9') {
++          switch (c) {
++            //  case 'p': //pixelAspectCorrect 0:off 1:on [libretro exclusive]
++            //    aspectcorrection = n == 1;
++            //    break;
++            //  case 'o': //overscan 0:216 1:224 (2:240 3:240f) [libretro exclusive]
++            //    overscan = n == 1;
++            //    break;
++            case 'w': //widescreenMode 0:none 1:on 2:mode7
++              emulator->configure("Hacks/PPU/Mode7/WsMode", n == 1 ? 2 : (n == 2 ? 1 : 0));
++              break;
++            case 'W': //WSaspectRatio int [<=200:wsExt, >200:ar]
++              emulator->configure("Hacks/PPU/Mode7/Widescreen",  n);
++              break;
++            case 's': //WSsprites 0:safe 1:unsafe 2:clip
++              emulator->configure("Hacks/PPU/Mode7/Wsobj", n == 1 ? 1 : (n == 2 ? 3 : 0));
++              break;
++            case 'i': //igwin 0:none 1:outside 2:outside&always 3:all
++              emulator->configure("Hacks/PPU/Mode7/Igwin", n > 3 ? 0 : n);
++              break;
++            case 'I': //igwinx int
++              emulator->configure("Hacks/PPU/Mode7/Igwinx", n > 255 ? 128 : n);
++              break;
++            case 'b': //bg1WS 0:off 1:on 2:auto(h+v)
++              emulator->configure("Hacks/PPU/Mode7/Wsbg1", 
++                  n >= 1000 ? n : //above/below line (processed later)
++                    (n ==  1 ?  1 : //on
++                    (n ==  2 ? 16 : //auto H+V
++                    (n ==  3 ? 15 : //auto H
++                    (n == 10 ? 12 : //crop
++                    (n == 11 ? 13 : //crop auto
++                    (n == 20 ? 14 : //disable
++                  0)))))) //off
++               );
++              break;
++            case 'B': //bg2WS 0:off 1:on 2:auto(h+v)
++              emulator->configure("Hacks/PPU/Mode7/Wsbg2", 
++                  n >= 1000 ? n : //above/below line (processed later)
++                    (n ==  1 ?  1 : //on
++                    (n ==  2 ? 16 : //auto H+V
++                    (n ==  3 ? 15 : //auto H
++                    (n == 10 ? 12 : //crop
++                    (n == 11 ? 13 : //crop auto
++                    (n == 20 ? 14 : //disable
++                  0)))))) //off
++               );
++              break;
++            case 'c': //bg3WS 0:off 1:on 2:auto(h+v)
++              emulator->configure("Hacks/PPU/Mode7/Wsbg3", 
++                  n >= 1000 ? n : //above/below line (processed later)
++                    (n ==  1 ?  1 : //on
++                    (n ==  2 ? 16 : //auto H+V
++                    (n ==  3 ? 15 : //auto H
++                    (n == 10 ? 12 : //crop
++                    (n == 11 ? 13 : //crop auto
++                    (n == 20 ? 14 : //disable
++                  0)))))) //off
++               );
++              break;
++            case 'C': //bg4WS 0:off 1:on 2:auto(h+v)
++              emulator->configure("Hacks/PPU/Mode7/Wsbg4", 
++                  n >= 1000 ? n : //above/below line (processed later)
++                    (n ==  1 ?  1 : //on
++                    (n ==  2 ? 16 : //auto H+V
++                    (n ==  3 ? 15 : //auto H
++                    (n == 10 ? 12 : //crop
++                    (n == 11 ? 13 : //crop auto
++                    (n == 20 ? 14 : //disable
++                  0)))))) //off
++               );
++              break;
++            case 'm': //wsMarker 0:off 1-10:lines 11-20:darken, wsMarkerAlpha 1-10/11-20:opaque-transparent
++              emulator->configure("Hacks/PPU/Mode7/WsMarker", n < 1 || n > 20 ? 0 : (n - 1) / 10 + 1);
++              emulator->configure("Hacks/PPU/Mode7/WsMarkerAlpha", (n - 1) % 10 + 1);
++              break;
++            case 'P': //Perspective 0:off 1-3:auto 4-6+:on (wide, medium, narrow)
++              emulator->configure("Hacks/PPU/Mode7/Perspective", n < 1 || n > 6 ? 0 : n );
++              break;
++            case 'O': //Overlock CPU percentage
++              emulator->configure("Hacks/CPU/Overclock", n );
++              break;
++            case 'S': //Stretch Window [for widescreen patches only]
++              emulator->configure("Hacks/PPU/Mode7/Strwin", n == 2 );
++              break;
++            case 'v': //VRAM extension
++              emulator->configure("Hacks/PPU/Mode7/VramExt", n > 0 ? 0xffff : 0x7fff );
++              break;
++            case 'f': //Scale factor 0:disable 1-10:scale
++              emulator->configure("Hacks/PPU/Mode7/Scale", n >= 0 && n <= 10 ? n : 2);
++              break;
++            case 'l': //Disable sprite limit
++              emulator->configure("Hacks/PPU/NoSpriteLimit", n == 1);
++              break;
++          }
++          c = -1;
++          n = 0;
++        }
++      }
++    }
++  }
++
+ }
+ 
+ auto Program::hackPatchMemory(vector<uint8_t>& data) -> void {
+diff --git a/bsnes/target-bsnes/program/platform.cpp b/bsnes/target-bsnes/program/platform.cpp
+index c316c7c36..bea8bcf07 100644
+--- a/bsnes/target-bsnes/program/platform.cpp
++++ b/bsnes/target-bsnes/program/platform.cpp
+@@ -203,6 +203,18 @@ auto Program::load(uint id, string name, string type, vector<string> options) ->
+ }
+ 
+ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height, uint scale) -> void {
++  static vector<uint32> converted;
++  converted.resize(width * height);
++  uint pixelPitch = pitch >> 1;
++  for(uint y : range(height)) {
++    auto src = data + y * pixelPitch;
++    auto dst = converted.data() + y * width;
++    for(uint x : range(width)) dst[x] = palette[src[x] & 0x7fff];
++  }
++  videoFrame(converted.data(), width * sizeof(uint32), width, height, scale);
++}
++
++auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height, uint scale) -> void {
+   //this relies on the UI only running between Emulator::Scheduler::Event::Frame events
+   //this will always be the case; so we can avoid an unnecessary copy or one-frame delay here
+   //if the core were to exit between a frame event, the next frame might've been only partially rendered
+@@ -212,20 +224,23 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
+   screenshot.height = height;
+   screenshot.scale  = scale;
+ 
+-  pitch >>= 1;
+-  if(!settings.video.overscan) {
+-    uint multiplier = height / 240;
+-    data += 8 * multiplier * pitch;
+-    height -= 16 * multiplier;
+-  }
++  uint offset = settings.video.overscan ? 8 : 12;
++  uint multiplier = height / 240;
++  data   += offset * multiplier * (pitch >> 2);
++  height -= offset * multiplier * 2;
+ 
+-  uint outputWidth, outputHeight;
++  uint outputWidth = width, outputHeight = height;
+   viewportSize(outputWidth, outputHeight, scale);
+ 
+   uint filterWidth = width, filterHeight = height;
+-  auto filterRender = filterSelect(filterWidth, filterHeight, scale);
+   if(auto [output, length] = video.acquire(filterWidth, filterHeight); output) {
+-    filterRender(palette, output, length, (const uint16_t*)data, pitch << 1, width, height);
++    if(length == pitch) {
++      memory::copy<uint32>(output, data, width * height);
++    } else {
++      for(uint y : range(height)) {
++        memory::copy<uint32>(output + y * (length >> 2), data + y * (pitch >> 2), width);
++      }
++    }
+     video.release();
+     video.output(outputWidth, outputHeight);
+   }
+diff --git a/bsnes/target-bsnes/program/program.hpp b/bsnes/target-bsnes/program/program.hpp
+index f0b25cfbb..038fceb30 100644
+--- a/bsnes/target-bsnes/program/program.hpp
++++ b/bsnes/target-bsnes/program/program.hpp
+@@ -10,6 +10,7 @@ struct Program : Lock, Emulator::Platform {
+   auto open(uint id, string name, vfs::file::mode mode, bool required) -> shared_pointer<vfs::file> override;
+   auto load(uint id, string name, string type, vector<string> options = {}) -> Emulator::Platform::Load override;
+   auto videoFrame(const uint16* data, uint pitch, uint width, uint height, uint scale) -> void override;
++  auto videoFrame(const uint32* data, uint pitch, uint width, uint height, uint scale) -> void override;
+   auto audioFrame(const double* samples, uint channels) -> void override;
+   auto inputPoll(uint port, uint device, uint input) -> int16 override;
+   auto inputRumble(uint port, uint device, uint input, bool enable) -> void override;
+@@ -28,6 +29,8 @@ struct Program : Lock, Emulator::Platform {
+   auto unload() -> void;
+   auto verified() const -> bool;
+ 
++  vector<uint8_t> rso;
++
+   //game-pak.cpp
+   auto openPakSuperFamicom(string name, vfs::file::mode mode) -> shared_pointer<vfs::file>;
+   auto openPakGameBoy(string name, vfs::file::mode mode) -> shared_pointer<vfs::file>;
+@@ -181,7 +184,7 @@ public:
+   uint32_t paletteDimmed[32768];
+ 
+   struct Screenshot {
+-    const uint16* data = nullptr;
++    const uint32* data = nullptr;
+     uint pitch  = 0;
+     uint width  = 0;
+     uint height = 0;
+diff --git a/bsnes/target-bsnes/program/viewport.cpp b/bsnes/target-bsnes/program/viewport.cpp
+index e5a4cac79..06ef10034 100644
+--- a/bsnes/target-bsnes/program/viewport.cpp
++++ b/bsnes/target-bsnes/program/viewport.cpp
+@@ -2,8 +2,8 @@ extern uint16_t SnowData[800];
+ extern  uint8_t SnowVelDist[800];
+ 
+ auto Program::viewportSize(uint& width, uint& height, uint scale) -> void {
+-  uint videoWidth = 256 * (settings.video.aspectCorrection ? 8.0 / 7.0 : 1.0);
+-  uint videoHeight = (settings.video.overscan ? 240.0 : 224.0);
++  uint videoWidth = (width / scale) * (settings.video.aspectCorrection ? 8.0 / 7.0 : 1.0);
++  uint videoHeight = (height / scale);
+ 
+   auto [viewportWidth, viewportHeight] = video.size();
+ 
+@@ -40,7 +40,7 @@ auto Program::viewportRefresh() -> void {
+   static uint32_t NumSnow = 0;
+   if(settings.video.snow) SnowMover++;
+ 
+-  static const uint16 nullData[256 * 240] = {};
++  static const uint32 nullData[256 * 240] = {};
+   auto data   = nullData;
+   uint pitch  = 512;
+   uint width  = 256;
+@@ -55,21 +55,26 @@ auto Program::viewportRefresh() -> void {
+     scale  = screenshot.scale;
+   }
+ 
+-  if(!settings.video.overscan) {
+-    uint multiplier = height / 240;
+-    data += 8 * multiplier * (pitch >> 1);
+-    height -= 16 * multiplier;
+-  }
+-
+-  uint outputWidth, outputHeight;
++  uint offset = settings.video.overscan ? 8 : 12;
++  uint multiplier = height / 215;
++  data   += offset * multiplier * (pitch >> 2);
++  height -= offset * multiplier * 2;
++  
++  uint outputWidth = width, outputHeight = height;
+   viewportSize(outputWidth, outputHeight, scale);
+ 
+   uint filterWidth = width, filterHeight = height;
+-  auto filterRender = filterSelect(filterWidth, filterHeight, scale);
+ 
+   if(auto [output, length] = video.acquire(filterWidth, filterHeight); output) {
+-    bool dimmed = settings.video.dimming && !presentation.frameAdvance.checked();
+-    filterRender(dimmed ? paletteDimmed : palette, output, length, (const uint16_t*)data, pitch, width, height);
++    //HD-TODO: add back 'dimmed' (rgb each >>=1)
++    if (length == pitch) {
++      memory::copy<uint32>(output, data, width * height);
++    } else {
++      for(uint y = 0; y < height; y++) {
++        memory::copy<uint32>(output + y * (length >> 2), data + y * (pitch >> 2), width);
++      }
++    }
++
+     length >>= 2;
+ 
+     if(settings.video.snow) {
+diff --git a/bsnes/target-bsnes/settings/emulator.cpp b/bsnes/target-bsnes/settings/emulator.cpp
+index 00f94e76f..f1630c3d6 100644
+--- a/bsnes/target-bsnes/settings/emulator.cpp
++++ b/bsnes/target-bsnes/settings/emulator.cpp
+@@ -20,14 +20,6 @@ auto EmulatorSettings::create() -> void {
+   autoLoadStateOnLoad.setText("Auto-resume on load").setChecked(settings.emulator.autoLoadStateOnLoad).onToggle([&] {
+     settings.emulator.autoLoadStateOnLoad = autoLoadStateOnLoad.checked();
+   });
+-  nativeFileDialogs.setText("Use native file dialogs").setChecked(settings.general.nativeFileDialogs).onToggle([&] {
+-    settings.general.nativeFileDialogs = nativeFileDialogs.checked();
+-  });
+-  screenSaver.setText("Allow screensaver during emulation").setChecked(settings.general.screenSaver).onToggle([&] {
+-    settings.general.screenSaver = screenSaver.checked();
+-    // setting can be toggled while emulation is active
+-    if(!program.inactive()) Application::setScreenSaver(settings.general.screenSaver);
+-  });
+   optionsSpacer.setColor({192, 192, 192});
+ 
+   fastForwardLabel.setText("Fast Forward").setFont(Font().setBold());
+diff --git a/bsnes/target-bsnes/settings/enhancements.cpp b/bsnes/target-bsnes/settings/enhancements.cpp
+index d3ed73dff..82d83acbd 100644
+--- a/bsnes/target-bsnes/settings/enhancements.cpp
++++ b/bsnes/target-bsnes/settings/enhancements.cpp
+@@ -59,11 +59,11 @@ auto EnhancementSettings::create() -> void {
+     if(!fastPPU.checked()) {
+       noSpriteLimit.setEnabled(false);
+       deinterlace.setEnabled(false);
+-      mode7Layout.setEnabled(false);
++      //mode7Layout.setEnabled(false);
+     } else {
+       noSpriteLimit.setEnabled(true);
+       deinterlace.setEnabled(true);
+-      mode7Layout.setEnabled(true);
++      //mode7Layout.setEnabled(true);
+     }
+   }).doToggle();
+   deinterlace.setText("Deinterlace").setChecked(settings.emulator.hack.ppu.deinterlace).onToggle([&] {
+@@ -74,35 +74,367 @@ auto EnhancementSettings::create() -> void {
+     settings.emulator.hack.ppu.noSpriteLimit = noSpriteLimit.checked();
+   });
+ 
+-  mode7Label.setText("HD Mode 7 (fast PPU only)").setFont(Font().setBold());
++
++  mode7Label.setText("HD Mode 7 / bsnes-hd").setFont(Font().setBold());
+   mode7ScaleLabel.setText("Scale:");
+-  mode7Scale.append(ComboButtonItem().setText( "240p").setAttribute("multiplier", 1));
+-  mode7Scale.append(ComboButtonItem().setText( "480p").setAttribute("multiplier", 2));
+-  mode7Scale.append(ComboButtonItem().setText( "720p").setAttribute("multiplier", 3));
+-  mode7Scale.append(ComboButtonItem().setText( "960p").setAttribute("multiplier", 4));
+-  mode7Scale.append(ComboButtonItem().setText("1200p").setAttribute("multiplier", 5));
+-  mode7Scale.append(ComboButtonItem().setText("1440p").setAttribute("multiplier", 6));
+-  mode7Scale.append(ComboButtonItem().setText("1680p").setAttribute("multiplier", 7));
+-  mode7Scale.append(ComboButtonItem().setText("1920p").setAttribute("multiplier", 8));
+-  for(uint n = 1; n <= 8; n++) {
+-    if(settings.emulator.hack.ppu.mode7.scale == n) mode7Scale.item(n - 1).setSelected();
++  mode7Scale.append(ComboButtonItem().setText("disable"));
++  mode7Scale.append(ComboButtonItem().setText("1x  224p"));
++  mode7Scale.append(ComboButtonItem().setText("2x  448p"));
++  mode7Scale.append(ComboButtonItem().setText("3x  672p"));
++  mode7Scale.append(ComboButtonItem().setText("4x  896p"));
++  mode7Scale.append(ComboButtonItem().setText("5x 1120p"));
++  mode7Scale.append(ComboButtonItem().setText("6x 1344p"));
++  mode7Scale.append(ComboButtonItem().setText("7x 1568p"));
++  mode7Scale.append(ComboButtonItem().setText("8x 1792p"));
++  mode7Scale.append(ComboButtonItem().setText("9x 2016p"));
++  mode7Scale.append(ComboButtonItem().setText("10x 2240p"));
++  for(uint n = 0; n <= 10; n++) {
++    if(settings.emulator.hack.ppu.mode7.scale == n) mode7Scale.item(n).setSelected();
+   }
+   mode7Scale.onChange([&] {
+-    settings.emulator.hack.ppu.mode7.scale = mode7Scale.selected().attribute("multiplier").natural();
++    settings.emulator.hack.ppu.mode7.scale = mode7Scale.selected().offset();
+     emulator->configure("Hacks/PPU/Mode7/Scale", settings.emulator.hack.ppu.mode7.scale);
++    //.resizeViewport();
+   });
+-  mode7Perspective.setText("Perspective correction").setChecked(settings.emulator.hack.ppu.mode7.perspective).onToggle([&] {
+-    settings.emulator.hack.ppu.mode7.perspective = mode7Perspective.checked();
++  mode7PerspectiveLabel.setText("Perspective correction:");
++  mode7Perspective.append(ComboButtonItem().setText("off"));
++  mode7Perspective.append(ComboButtonItem().setText("auto/wide"));
++  mode7Perspective.append(ComboButtonItem().setText("auto/medium"));
++  mode7Perspective.append(ComboButtonItem().setText("auto/narrow"));
++  mode7Perspective.append(ComboButtonItem().setText("on/wide"));
++  mode7Perspective.append(ComboButtonItem().setText("on/medium"));
++  mode7Perspective.append(ComboButtonItem().setText("on/narrow"));
++  for(uint n = 0; n < 7; n++) {
++    if(mode7Perspective.item(n).offset() == settings.emulator.hack.ppu.mode7.perspective)
++       mode7Perspective.item(n).setSelected();
++  }
++  mode7Perspective.onChange([&] {
++    settings.emulator.hack.ppu.mode7.perspective = mode7Perspective.selected().offset();
+     emulator->configure("Hacks/PPU/Mode7/Perspective", settings.emulator.hack.ppu.mode7.perspective);
+   });
+-  mode7Supersample.setText("Supersampling").setChecked(settings.emulator.hack.ppu.mode7.supersample).onToggle([&] {
+-    settings.emulator.hack.ppu.mode7.supersample = mode7Supersample.checked();
+-    emulator->configure("Hacks/PPU/Mode7/Supersample", settings.emulator.hack.ppu.mode7.supersample);
++  mode7SupersampleLabel.setText("Supersampling:");
++  mode7Supersample.append(ComboButtonItem().setText("none"));
++  mode7Supersample.append(ComboButtonItem().setText("2x"));
++  mode7Supersample.append(ComboButtonItem().setText("3x"));
++  mode7Supersample.append(ComboButtonItem().setText("4x"));
++  mode7Supersample.append(ComboButtonItem().setText("5x"));
++  mode7Supersample.append(ComboButtonItem().setText("6x"));
++  mode7Supersample.append(ComboButtonItem().setText("7x"));
++  mode7Supersample.append(ComboButtonItem().setText("8x"));
++  mode7Supersample.append(ComboButtonItem().setText("9x"));
++  mode7Supersample.append(ComboButtonItem().setText("10x"));
++  for(uint n = 0; n < 10; n++) {
++    if(mode7Supersample.item(n).offset() + 1 == settings.emulator.hack.ppu.mode7.ssFactor)
++       mode7Supersample.item(n).setSelected();
++  }
++  mode7Supersample.onChange([&] {
++    settings.emulator.hack.ppu.mode7.ssFactor = mode7Supersample.selected().offset() + 1;
++    emulator->configure("Hacks/PPU/Mode7/SsFactor", settings.emulator.hack.ppu.mode7.ssFactor);
+   });
+-  mode7Mosaic.setText("HD->SD Mosaic").setChecked(settings.emulator.hack.ppu.mode7.mosaic).onToggle([&] {
+-    settings.emulator.hack.ppu.mode7.mosaic = mode7Mosaic.checked();
++  mode7MosaicLabel.setText("Mosaic:");
++  mode7Mosaic.append(ComboButtonItem().setText("non-HD"));
++  mode7Mosaic.append(ComboButtonItem().setText("1x scale"));
++  mode7Mosaic.append(ComboButtonItem().setText("ignore"));
++  for(uint n = 0; n <= 2; n++) {
++    if(mode7Mosaic.item(n).offset() == settings.emulator.hack.ppu.mode7.mosaic)
++       mode7Mosaic.item(n).setSelected();
++  }
++  mode7Mosaic.onChange([&] {
++    settings.emulator.hack.ppu.mode7.mosaic = mode7Mosaic.selected().offset();
+     emulator->configure("Hacks/PPU/Mode7/Mosaic", settings.emulator.hack.ppu.mode7.mosaic);
+   });
++  
++  mode7WidescreenLabel.setText("Aspect ratio:");
++  mode7Widescreen.append(ComboButtonItem().setText("none"));
++  mode7Widescreen.append(ComboButtonItem().setText( "4:3"));
++  mode7Widescreen.append(ComboButtonItem().setText("16:10"));
++  mode7Widescreen.append(ComboButtonItem().setText("16:9"));
++  mode7Widescreen.append(ComboButtonItem().setText( "2:1"));
++  mode7Widescreen.append(ComboButtonItem().setText("21:9"));
++  if (8 > settings.emulator.hack.ppu.mode7.widescreen)        mode7Widescreen.item(0).setSelected();
++  else if ( 28 > settings.emulator.hack.ppu.mode7.widescreen ||  403 == settings.emulator.hack.ppu.mode7.widescreen) mode7Widescreen.item(1).setSelected();
++  else if ( 52 > settings.emulator.hack.ppu.mode7.widescreen || 1610 == settings.emulator.hack.ppu.mode7.widescreen) mode7Widescreen.item(2).setSelected();
++  else if ( 76 > settings.emulator.hack.ppu.mode7.widescreen || 1609 == settings.emulator.hack.ppu.mode7.widescreen) mode7Widescreen.item(3).setSelected();
++  else if (104 > settings.emulator.hack.ppu.mode7.widescreen ||  201 == settings.emulator.hack.ppu.mode7.widescreen) mode7Widescreen.item(4).setSelected();
++  else if (160 > settings.emulator.hack.ppu.mode7.widescreen || 2109 == settings.emulator.hack.ppu.mode7.widescreen) mode7Widescreen.item(5).setSelected();
++  mode7Widescreen.onChange([&] {
++    if (0 == mode7Widescreen.selected().offset())      settings.emulator.hack.ppu.mode7.widescreen =     0;
++    else if (1 == mode7Widescreen.selected().offset()) settings.emulator.hack.ppu.mode7.widescreen =   403;
++    else if (2 == mode7Widescreen.selected().offset()) settings.emulator.hack.ppu.mode7.widescreen =  1610;
++    else if (3 == mode7Widescreen.selected().offset()) settings.emulator.hack.ppu.mode7.widescreen =  1609;
++    else if (4 == mode7Widescreen.selected().offset()) settings.emulator.hack.ppu.mode7.widescreen =   201;
++    else if (5 == mode7Widescreen.selected().offset()) settings.emulator.hack.ppu.mode7.widescreen =  2109;
++    emulator->configure("Hacks/PPU/Mode7/Widescreen",  settings.emulator.hack.ppu.mode7.widescreen);
++  });
++  
++  wsBG1Label.setText("BG1:");
++  wsBG1.append(ComboButtonItem().setText("off"));
++  wsBG1.append(ComboButtonItem().setText("on"));
++  wsBG1.append(ComboButtonItem().setText("< 40"));
++  wsBG1.append(ComboButtonItem().setText("> 40"));
++  wsBG1.append(ComboButtonItem().setText("< 80"));
++  wsBG1.append(ComboButtonItem().setText("> 80"));
++  wsBG1.append(ComboButtonItem().setText("<120"));
++  wsBG1.append(ComboButtonItem().setText(">120"));
++  wsBG1.append(ComboButtonItem().setText("<160"));
++  wsBG1.append(ComboButtonItem().setText(">160"));
++  wsBG1.append(ComboButtonItem().setText("<200"));
++  wsBG1.append(ComboButtonItem().setText(">200"));
++  wsBG1.append(ComboButtonItem().setText("crop"));
++  wsBG1.append(ComboButtonItem().setText("cropAuto"));
++  wsBG1.append(ComboButtonItem().setText("disable"));
++  wsBG1.append(ComboButtonItem().setText("autoHor"));
++  wsBG1.append(ComboButtonItem().setText("autoHor&Ver"));
++  for(uint n = 0; n <= 16; n++) {
++    if(wsBG1.item(n).offset() == settings.emulator.hack.ppu.mode7.wsbg1)
++       wsBG1.item(n).setSelected();
++  }
++  wsBG1.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsbg1 = wsBG1.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/Wsbg1", settings.emulator.hack.ppu.mode7.wsbg1);
++  });
++  wsBG2Label.setText("BG2:");
++  wsBG2.append(ComboButtonItem().setText("off"));
++  wsBG2.append(ComboButtonItem().setText("on"));
++  wsBG2.append(ComboButtonItem().setText("< 40"));
++  wsBG2.append(ComboButtonItem().setText("> 40"));
++  wsBG2.append(ComboButtonItem().setText("< 80"));
++  wsBG2.append(ComboButtonItem().setText("> 80"));
++  wsBG2.append(ComboButtonItem().setText("<120"));
++  wsBG2.append(ComboButtonItem().setText(">120"));
++  wsBG2.append(ComboButtonItem().setText("<160"));
++  wsBG2.append(ComboButtonItem().setText(">160"));
++  wsBG2.append(ComboButtonItem().setText("<200"));
++  wsBG2.append(ComboButtonItem().setText(">200"));
++  wsBG2.append(ComboButtonItem().setText("crop"));
++  wsBG2.append(ComboButtonItem().setText("cropAuto"));
++  wsBG2.append(ComboButtonItem().setText("disable"));
++  wsBG2.append(ComboButtonItem().setText("autoHor"));
++  wsBG2.append(ComboButtonItem().setText("autoHor&Ver"));
++  for(uint n = 0; n <= 16; n++) {
++    if(wsBG2.item(n).offset() == settings.emulator.hack.ppu.mode7.wsbg2)
++       wsBG2.item(n).setSelected();
++  }
++  wsBG2.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsbg2 = wsBG2.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/Wsbg2", settings.emulator.hack.ppu.mode7.wsbg2);
++  });
++  wsBG3Label.setText("BG3:");
++  wsBG3.append(ComboButtonItem().setText("off"));
++  wsBG3.append(ComboButtonItem().setText("on"));
++  wsBG3.append(ComboButtonItem().setText("< 40"));
++  wsBG3.append(ComboButtonItem().setText("> 40"));
++  wsBG3.append(ComboButtonItem().setText("< 80"));
++  wsBG3.append(ComboButtonItem().setText("> 80"));
++  wsBG3.append(ComboButtonItem().setText("<120"));
++  wsBG3.append(ComboButtonItem().setText(">120"));
++  wsBG3.append(ComboButtonItem().setText("<160"));
++  wsBG3.append(ComboButtonItem().setText(">160"));
++  wsBG3.append(ComboButtonItem().setText("<200"));
++  wsBG3.append(ComboButtonItem().setText(">200"));
++  wsBG3.append(ComboButtonItem().setText("crop"));
++  wsBG3.append(ComboButtonItem().setText("cropAuto"));
++  wsBG3.append(ComboButtonItem().setText("disable"));
++  wsBG3.append(ComboButtonItem().setText("autoHor"));
++  wsBG3.append(ComboButtonItem().setText("autoHor&Ver"));
++  for(uint n = 0; n <= 16; n++) {
++    if(wsBG3.item(n).offset() == settings.emulator.hack.ppu.mode7.wsbg3)
++       wsBG3.item(n).setSelected();
++  }
++  wsBG3.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsbg3 = wsBG3.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/Wsbg3", settings.emulator.hack.ppu.mode7.wsbg3);
++  });
++  wsBG4Label.setText("BG4:");
++  wsBG4.append(ComboButtonItem().setText("off"));
++  wsBG4.append(ComboButtonItem().setText("on"));
++  wsBG4.append(ComboButtonItem().setText("< 40"));
++  wsBG4.append(ComboButtonItem().setText("> 40"));
++  wsBG4.append(ComboButtonItem().setText("< 80"));
++  wsBG4.append(ComboButtonItem().setText("> 80"));
++  wsBG4.append(ComboButtonItem().setText("<120"));
++  wsBG4.append(ComboButtonItem().setText(">120"));
++  wsBG4.append(ComboButtonItem().setText("<160"));
++  wsBG4.append(ComboButtonItem().setText(">160"));
++  wsBG4.append(ComboButtonItem().setText("<200"));
++  wsBG4.append(ComboButtonItem().setText(">200"));
++  wsBG4.append(ComboButtonItem().setText("crop"));
++  wsBG4.append(ComboButtonItem().setText("cropAuto"));
++  wsBG4.append(ComboButtonItem().setText("disable"));
++  wsBG4.append(ComboButtonItem().setText("autoHor"));
++  wsBG4.append(ComboButtonItem().setText("autoHor&Ver"));
++  for(uint n = 0; n <= 16; n++) {
++    if(wsBG4.item(n).offset() == settings.emulator.hack.ppu.mode7.wsbg4)
++       wsBG4.item(n).setSelected();
++  }
++  wsBG4.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsbg4 = wsBG4.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/Wsbg4", settings.emulator.hack.ppu.mode7.wsbg4);
++  });
++  wsObjLabel.setText("Sprites:");
++  wsObj.append(ComboButtonItem().setText("safe"));
++  wsObj.append(ComboButtonItem().setText("unsafe"));
++  wsObj.append(ComboButtonItem().setText("disable"));
++  wsObj.append(ComboButtonItem().setText("clip"));
++  for(uint n = 0; n <= 3; n++) {
++    if(wsObj.item(n).offset() == settings.emulator.hack.ppu.mode7.wsobj)
++       wsObj.item(n).setSelected();
++  }
++  wsObj.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsobj = wsObj.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/Wsobj", settings.emulator.hack.ppu.mode7.wsobj);
++  });
++  igwinLabel.setText("Ignore window:");
++  igwin.append(ComboButtonItem().setText("none"));
++  igwin.append(ComboButtonItem().setText("outside"));
++  igwin.append(ComboButtonItem().setText("outside&always"));
++  igwin.append(ComboButtonItem().setText("all"));
++  for(uint n = 0; n < 4; n++) {
++    if(igwin.item(n).offset() == settings.emulator.hack.ppu.mode7.igwin)
++       igwin.item(n).setSelected();
++  }
++  igwin.onChange([&] {
++    settings.emulator.hack.ppu.mode7.igwin = igwin.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/Igwin", settings.emulator.hack.ppu.mode7.igwin);
++  });
++  igwinxLabel.setText("IW fallback x-coordinate:");
++  igwinx.append(ComboButtonItem().setText(" 40"));//.setProperty("col",  40));
++  igwinx.append(ComboButtonItem().setText(" 88"));//.setProperty("col",  88));
++  igwinx.append(ComboButtonItem().setText("128"));//.setProperty("col", 128));
++  igwinx.append(ComboButtonItem().setText("168"));//.setProperty("col", 168));
++  igwinx.append(ComboButtonItem().setText("216"));//.setProperty("col", 216));
++  /*for(uint n = 0; n < 5; n++) {
++    if(igwinx.item(n).property("col").natural() == settings.emulator.hack.ppu.mode7.igwinx)
++       igwinx.item(n).setSelected();
++  }*/
++  if (40 == settings.emulator.hack.ppu.mode7.igwinx) {
++    igwinx.item(0).setSelected();
++  } else if (88 == settings.emulator.hack.ppu.mode7.igwinx) {
++    igwinx.item(1).setSelected();
++  } else if (128 == settings.emulator.hack.ppu.mode7.igwinx) {
++    igwinx.item(2).setSelected();
++  } else if (168 == settings.emulator.hack.ppu.mode7.igwinx) {
++    igwinx.item(3).setSelected();
++  } else if (216 == settings.emulator.hack.ppu.mode7.igwinx) {
++    igwinx.item(4).setSelected();
++  }
++  igwinx.onChange([&] {
++    //settings.emulator.hack.ppu.mode7.igwinx = igwinx.selected().offset();
++    if (0 == mode7Widescreen.selected().offset()) {
++      settings.emulator.hack.ppu.mode7.igwinx = 40;
++    } else if (1 == igwinx.selected().offset()) {
++      settings.emulator.hack.ppu.mode7.igwinx = 88;
++    } else if (2 == igwinx.selected().offset()) {
++      settings.emulator.hack.ppu.mode7.igwinx = 128;
++    } else if (3 == igwinx.selected().offset()) {
++      settings.emulator.hack.ppu.mode7.igwinx = 168;
++    } else if (4 == igwinx.selected().offset()) {
++      settings.emulator.hack.ppu.mode7.igwinx = 216;
++    }
++    emulator->configure("Hacks/PPU/Mode7/Igwinx", settings.emulator.hack.ppu.mode7.igwinx);
++  });
++
++  wsBgColLabel.setText("WS bg:");
++  wsBgCol.append(ComboButtonItem().setText("color"));
++  wsBgCol.append(ComboButtonItem().setText("auto"));
++  wsBgCol.append(ComboButtonItem().setText("black"));
++  for(uint n = 0; n <= 2; n++) {
++    if(wsBgCol.item(n).offset() == settings.emulator.hack.ppu.mode7.wsBgCol)
++       wsBgCol.item(n).setSelected();
++  }
++  wsBgCol.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsBgCol = wsBgCol.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/WsBgCol", settings.emulator.hack.ppu.mode7.wsBgCol);
++  });
++
++  wsModeLabel.setText("Widescreen:");
++  wsMode.append(ComboButtonItem().setText("none"));
++  wsMode.append(ComboButtonItem().setText("Mode 7"));
++  wsMode.append(ComboButtonItem().setText("all"));
++  for(uint n = 0; n < 3; n++) {
++    if(wsMode.item(n).offset() == settings.emulator.hack.ppu.mode7.wsMode)
++       wsMode.item(n).setSelected();
++  }
++  wsMode.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsMode = wsMode.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/WsMode", settings.emulator.hack.ppu.mode7.wsMode);
++    //presentation.resizeViewport();
++  });
++
++
++  wsMarkerLabel.setText("WS marker:");
++  wsMarker.append(ComboButtonItem().setText("none"));
++  wsMarker.append(ComboButtonItem().setText("lines"));
++  wsMarker.append(ComboButtonItem().setText("darken"));
++  for(uint n = 0; n <= 2; n++) {
++    if(wsMarker.item(n).offset() == settings.emulator.hack.ppu.mode7.wsMarker)
++       wsMarker.item(n).setSelected();
++  }
++  wsMarker.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsMarker = wsMarker.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/WsMarker", settings.emulator.hack.ppu.mode7.wsMarker);
++  });
++
++
++  wsMarkerAlphaLabel.setText("WSM alpha:");
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/1" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/2" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/3" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/4" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/5" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/6" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/7" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/8" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/9" ));
++  wsMarkerAlpha.append(ComboButtonItem().setText("1/10"));
++  for(uint n = 0; n < 10; n++) {
++    if(wsMarkerAlpha.item(n).offset() + 1 == settings.emulator.hack.ppu.mode7.wsMarkerAlpha)
++       wsMarkerAlpha.item(n).setSelected();
++  }
++  wsMarkerAlpha.onChange([&] {
++    settings.emulator.hack.ppu.mode7.wsMarkerAlpha = wsMarkerAlpha.selected().offset() + 1;
++    emulator->configure("Hacks/PPU/Mode7/WsMarkerAlpha", settings.emulator.hack.ppu.mode7.wsMarkerAlpha);
++  });
++
++
++  bgGradLabel.setText("Line color HD:");
++  bgGrad.append(ComboButtonItem().setText("0"));
++  bgGrad.append(ComboButtonItem().setText("1"));
++  bgGrad.append(ComboButtonItem().setText("2"));
++  bgGrad.append(ComboButtonItem().setText("3"));
++  bgGrad.append(ComboButtonItem().setText("4"));
++  bgGrad.append(ComboButtonItem().setText("5"));
++  bgGrad.append(ComboButtonItem().setText("6"));
++  bgGrad.append(ComboButtonItem().setText("7"));
++  bgGrad.append(ComboButtonItem().setText("8"));
++  for(uint n = 0; n <= 8; n++) {
++    if(bgGrad.item(n).offset() == settings.emulator.hack.ppu.mode7.bgGrad)
++       bgGrad.item(n).setSelected();
++  }
++  bgGrad.onChange([&] {
++    settings.emulator.hack.ppu.mode7.bgGrad = bgGrad.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/BgGrad", settings.emulator.hack.ppu.mode7.bgGrad);
++  });
++
++  windRadLabel.setText("Window HD:");
++  windRad.append(ComboButtonItem().setText("0"));
++  windRad.append(ComboButtonItem().setText("1"));
++  windRad.append(ComboButtonItem().setText("2"));
++  windRad.append(ComboButtonItem().setText("3"));
++  windRad.append(ComboButtonItem().setText("4"));
++  windRad.append(ComboButtonItem().setText("5"));
++  windRad.append(ComboButtonItem().setText("6"));
++  windRad.append(ComboButtonItem().setText("7"));
++  windRad.append(ComboButtonItem().setText("8"));
++  for(uint n = 0; n <= 8; n++) {
++    if(windRad.item(n).offset() == settings.emulator.hack.ppu.mode7.windRad)
++       windRad.item(n).setSelected();
++  }
++  windRad.onChange([&] {
++    settings.emulator.hack.ppu.mode7.windRad = windRad.selected().offset();
++    emulator->configure("Hacks/PPU/Mode7/WindRad", settings.emulator.hack.ppu.mode7.windRad);
++  });
++
+ 
+   dspLabel.setText("DSP (audio)").setFont(Font().setBold());
+   fastDSP.setText("Fast mode").setChecked(settings.emulator.hack.dsp.fast).onToggle([&] {
+@@ -124,7 +456,6 @@ auto EnhancementSettings::create() -> void {
+   ).onToggle([&] {
+     settings.emulator.hack.coprocessor.preferHLE = coprocessorPreferHLEOption.checked();
+   });
+-  coprocessorSpacer.setColor({192, 192, 192});
+ 
+   gameLabel.setText("Game Enhancements").setFont(Font().setBold());
+   hotfixes.setText("Hotfixes").setToolTip({
+diff --git a/bsnes/target-bsnes/settings/input.cpp b/bsnes/target-bsnes/settings/input.cpp
+index fd76ac786..a056445ad 100644
+--- a/bsnes/target-bsnes/settings/input.cpp
++++ b/bsnes/target-bsnes/settings/input.cpp
+@@ -68,11 +68,12 @@ auto InputSettings::updateControls() -> void {
+   assignMouse3.setVisible(false);
+ 
+   if(activeMapping) {
+-    if(activeMapping->isDigital()) {
++    auto& input = activeDevice().mappings[batched.left().offset()];
++    if(input.isDigital()) {
+       assignMouse1.setVisible().setText("Mouse Left");
+       assignMouse2.setVisible().setText("Mouse Middle");
+       assignMouse3.setVisible().setText("Mouse Right");
+-    } else if(activeMapping->isAnalog()) {
++    } else if(input.isAnalog()) {
+       assignMouse1.setVisible().setText("Mouse X-axis");
+       assignMouse2.setVisible().setText("Mouse Y-axis");
+     }
+@@ -123,7 +124,7 @@ auto InputSettings::reloadMappings() -> void {
+     for(uint n : range(BindingLimit)) item.append(TableViewCell());
+   }
+   refreshMappings();
+-  cancelMapping();
++  updateControls();
+ }
+ 
+ auto InputSettings::refreshMappings() -> void {
+@@ -145,7 +146,6 @@ auto InputSettings::assignMapping(TableViewCell cell) -> void {
+   inputManager.poll();  //clear any pending events first
+ 
+   for(auto mapping : mappingList.batched()) {
+-    refreshMappings();  //clear existing 'assign...' text
+     activeMapping = activeDevice().mappings[mapping.offset()];
+     activeBinding = max(0, (int)cell.offset() - 1);
+     mappingList.item(mapping.offset()).cell(1 + activeBinding).setIcon(Icon::Go::Right).setText("(assign ...)");
+diff --git a/bsnes/target-bsnes/settings/paths.cpp b/bsnes/target-bsnes/settings/paths.cpp
+index 6fb38f436..c42a19187 100644
+--- a/bsnes/target-bsnes/settings/paths.cpp
++++ b/bsnes/target-bsnes/settings/paths.cpp
+@@ -8,7 +8,7 @@ auto PathSettings::create() -> void {
+   gamesLabel.setText("Games:");
+   gamesPath.setEditable(false);
+   gamesAssign.setText("Assign ...").onActivate([&] {
+-    if(auto location = program.selectPath()) {
++    if(auto location = BrowserDialog().selectFolder()) {
+       settings.path.games = location;
+       refreshPaths();
+     }
+@@ -21,7 +21,7 @@ auto PathSettings::create() -> void {
+   patchesLabel.setText("Patches:");
+   patchesPath.setEditable(false);
+   patchesAssign.setText("Assign ...").onActivate([&] {
+-    if(auto location = program.selectPath()) {
++    if(auto location = BrowserDialog().selectFolder()) {
+       settings.path.patches = location;
+       refreshPaths();
+     }
+@@ -34,7 +34,7 @@ auto PathSettings::create() -> void {
+   savesLabel.setText("Saves:");
+   savesPath.setEditable(false);
+   savesAssign.setText("Assign ...").onActivate([&] {
+-    if(auto location = program.selectPath()) {
++    if(auto location = BrowserDialog().selectFolder()) {
+       settings.path.saves = location;
+       refreshPaths();
+     }
+@@ -47,7 +47,7 @@ auto PathSettings::create() -> void {
+   cheatsLabel.setText("Cheats:");
+   cheatsPath.setEditable(false);
+   cheatsAssign.setText("Assign ...").onActivate([&] {
+-    if(auto location = program.selectPath()) {
++    if(auto location = BrowserDialog().selectFolder()) {
+       settings.path.cheats = location;
+       refreshPaths();
+     }
+@@ -60,7 +60,7 @@ auto PathSettings::create() -> void {
+   statesLabel.setText("States:");
+   statesPath.setEditable(false);
+   statesAssign.setText("Assign ...").onActivate([&] {
+-    if(auto location = program.selectPath()) {
++    if(auto location = BrowserDialog().selectFolder()) {
+       settings.path.states = location;
+       refreshPaths();
+     }
+@@ -73,7 +73,7 @@ auto PathSettings::create() -> void {
+   screenshotsLabel.setText("Screenshots:");
+   screenshotsPath.setEditable(false);
+   screenshotsAssign.setText("Assign ...").onActivate([&] {
+-    if(auto location = program.selectPath()) {
++    if(auto location = BrowserDialog().selectFolder()) {
+       settings.path.screenshots = location;
+       refreshPaths();
+     }
+diff --git a/bsnes/target-bsnes/settings/settings.cpp b/bsnes/target-bsnes/settings/settings.cpp
+index 0c17d723e..ddb7eb3ad 100644
+--- a/bsnes/target-bsnes/settings/settings.cpp
++++ b/bsnes/target-bsnes/settings/settings.cpp
+@@ -24,7 +24,7 @@ SettingsWindow& settingsWindow = Instances::settingsWindow();
+ auto Settings::load() -> void {
+   Markup::Node::operator=(BML::unserialize(string::read(location), " "));
+   process(true);
+-  save();
++  file::write(locate("settings.bml"), BML::serialize(*this, " "));
+ }
+ 
+ auto Settings::save() -> void {
+@@ -125,9 +125,24 @@ auto Settings::process(bool load) -> void {
+   bind(boolean, "Emulator/Hack/PPU/NoSpriteLimit",       emulator.hack.ppu.noSpriteLimit);
+   bind(boolean, "Emulator/Hack/PPU/NoVRAMBlocking",      emulator.hack.ppu.noVRAMBlocking);
+   bind(natural, "Emulator/Hack/PPU/Mode7/Scale",         emulator.hack.ppu.mode7.scale);
+-  bind(boolean, "Emulator/Hack/PPU/Mode7/Perspective",   emulator.hack.ppu.mode7.perspective);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Perspective",   emulator.hack.ppu.mode7.perspective);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Widescreen",    emulator.hack.ppu.mode7.widescreen);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Wsbg1",         emulator.hack.ppu.mode7.wsbg1);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Wsbg2",         emulator.hack.ppu.mode7.wsbg2);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Wsbg3",         emulator.hack.ppu.mode7.wsbg3);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Wsbg4",         emulator.hack.ppu.mode7.wsbg4);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Wsobj",         emulator.hack.ppu.mode7.wsobj);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Igwin",         emulator.hack.ppu.mode7.igwin);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Igwinx",        emulator.hack.ppu.mode7.igwinx);
++  bind(natural, "Emulator/Hack/PPU/Mode7/BgGrad",        emulator.hack.ppu.mode7.bgGrad);
++  bind(natural, "Emulator/Hack/PPU/Mode7/WindRad",       emulator.hack.ppu.mode7.windRad);
++  bind(natural, "Emulator/Hack/PPU/Mode7/WsMode",        emulator.hack.ppu.mode7.wsMode);
++  bind(natural, "Emulator/Hack/PPU/Mode7/WsBgCol",       emulator.hack.ppu.mode7.wsBgCol);
++  bind(natural, "Emulator/Hack/PPU/Mode7/WsMarker",      emulator.hack.ppu.mode7.wsMarker);
++  bind(natural, "Emulator/Hack/PPU/Mode7/WsMarkerAlpha", emulator.hack.ppu.mode7.wsMarkerAlpha);
+   bind(boolean, "Emulator/Hack/PPU/Mode7/Supersample",   emulator.hack.ppu.mode7.supersample);
+-  bind(boolean, "Emulator/Hack/PPU/Mode7/Mosaic",        emulator.hack.ppu.mode7.mosaic);
++  bind(natural, "Emulator/Hack/PPU/Mode7/SsFactor",      emulator.hack.ppu.mode7.ssFactor);
++  bind(natural, "Emulator/Hack/PPU/Mode7/Mosaic",        emulator.hack.ppu.mode7.mosaic);
+   bind(boolean, "Emulator/Hack/DSP/Fast",                emulator.hack.dsp.fast);
+   bind(boolean, "Emulator/Hack/DSP/Cubic",               emulator.hack.dsp.cubic);
+   bind(boolean, "Emulator/Hack/DSP/EchoShadow",          emulator.hack.dsp.echoShadow);
+@@ -137,11 +152,11 @@ auto Settings::process(bool load) -> void {
+   bind(natural, "Emulator/Hack/SuperFX/Overclock",       emulator.hack.superfx.overclock);
+   bind(boolean, "Emulator/Cheats/Enable",                emulator.cheats.enable);
+ 
+-  bind(boolean, "General/StatusBar",         general.statusBar);
+-  bind(boolean, "General/ScreenSaver",       general.screenSaver);
+-  bind(boolean, "General/ToolTips",          general.toolTips);
+-  bind(boolean, "General/Crashed",           general.crashed);
+-  bind(boolean, "General/NativeFileDialogs", general.nativeFileDialogs);
++  bind(boolean, "General/StatusBar",   general.statusBar);
++  bind(boolean, "General/ScreenSaver", general.screenSaver);
++  bind(boolean, "General/ToolTips",    general.toolTips);
++  bind(boolean, "General/Crashed",     general.crashed);
++  bind(boolean, "General/BetaWarning", general.betaWarning);
+ 
+   #undef bind
+ }
+diff --git a/bsnes/target-bsnes/settings/settings.hpp b/bsnes/target-bsnes/settings/settings.hpp
+index 5108352d5..1c6130ac2 100644
+--- a/bsnes/target-bsnes/settings/settings.hpp
++++ b/bsnes/target-bsnes/settings/settings.hpp
+@@ -18,13 +18,13 @@ struct Settings : Markup::Node {
+ 
+     uint luminance = 100;
+     uint saturation = 100;
+-    uint gamma = 150;
++    uint gamma = 100;
+     bool dimming = true;
+     bool snow = false;
+ 
+     string output = "Scale";
+     uint multiplier = 2;
+-    bool aspectCorrection = true;
++    bool aspectCorrection = false;
+     bool overscan = false;
+     bool blur = false;
+     string filter = "None";
+@@ -110,13 +110,28 @@ struct Settings : Markup::Node {
+       struct PPU {
+         bool fast = true;
+         bool deinterlace = true;
+-        bool noSpriteLimit = false;
++        bool noSpriteLimit = true;
+         bool noVRAMBlocking = false;
+         struct Mode7 {
+-          uint scale = 1;
+-          bool perspective = true;
++          uint scale = 2;
++          uint perspective = 1;
+           bool supersample = false;
+-          bool mosaic = true;
++          uint ssFactor = 1;
++          uint mosaic = 1;
++          uint widescreen = 64;
++          uint wsbg1 = 16;
++          uint wsbg2 = 16;
++          uint wsbg3 = 16;
++          uint wsbg4 = 16;
++          uint wsobj = 0;
++          uint igwin = 1;
++          uint igwinx = 128;
++          uint bgGrad = 4;
++          uint windRad = 0;
++          uint wsMode = 1;
++          uint wsBgCol = 1;
++          uint wsMarker = 0;
++          uint wsMarkerAlpha = 1;
+         } mode7;
+       } ppu;
+       struct DSP {
+@@ -145,6 +160,7 @@ struct Settings : Markup::Node {
+     bool screenSaver = false;
+     bool toolTips = true;
+     bool crashed = false;
++    bool betaWarning = true;
+     bool nativeFileDialogs = false;
+   } general;
+ };
+@@ -303,13 +319,11 @@ struct EmulatorSettings : VerticalLayout {
+ 
+ public:
+   Label optionsLabel{this, Size{~0, 0}, 2};
+-  CheckLabel warnOnUnverifiedGames{this, Size{~0, 0}, 2};
+-  CheckLabel autoSaveMemory{this, Size{~0, 0}, 2};
+-  HorizontalLayout autoStateLayout{this, Size{~0, 0}, 2};
++  CheckLabel warnOnUnverifiedGames{this, Size{~0, 0}};
++  CheckLabel autoSaveMemory{this, Size{~0, 0}};
++  HorizontalLayout autoStateLayout{this, Size{~0, 0}};
+     CheckLabel autoSaveStateOnUnload{&autoStateLayout, Size{0, 0}};
+     CheckLabel autoLoadStateOnLoad{&autoStateLayout, Size{0, 0}};
+-  CheckLabel nativeFileDialogs{this, Size{~0, 0}};
+-  CheckLabel screenSaver{this, Size{~0, 0}};
+   Canvas optionsSpacer{this, Size{~0, 1}};
+   //
+   Label fastForwardLabel{this, Size{~0, 0}, 2};
+@@ -358,34 +372,77 @@ public:
+     Label sfxLabel{&overclockingLayout, Size{0, 0}};
+     Label sfxValue{&overclockingLayout, Size{50_sx, 0}};
+     HorizontalSlider sfxClock{&overclockingLayout, Size{~0, 0}};
++
++  HorizontalLayout topLayout{this, Size{~0, 0}};
++    //
++    VerticalLayout ppuVLayout{&topLayout, Size{~0, 0}};
++      Label ppuLabel{&ppuVLayout, Size{~0, 0}, 2};
++      HorizontalLayout ppuLayout{&ppuVLayout, Size{~0, 0}};
++        CheckLabel fastPPU{&ppuLayout, Size{0, 0}};
++        CheckLabel deinterlace{&ppuLayout, Size{0, 0}};
++        CheckLabel noSpriteLimit{&ppuLayout, Size{0, 0}};
++    //
++    VerticalLayout dspVLayout{&topLayout, Size{~0, 0}};
++      Label dspLabel{&dspVLayout, Size{~0, 0}, 2};
++      HorizontalLayout dspLayout{&dspVLayout, Size{~0, 0}};
++        CheckLabel fastDSP{&dspLayout, Size{0, 0}};
++        CheckLabel cubicInterpolation{&dspLayout, Size{0, 0}};
++
+   //
+-  Label ppuLabel{this, Size{~0, 0}, 2};
+-  HorizontalLayout ppuLayout{this, Size{~0, 0}};
+-    CheckLabel fastPPU{&ppuLayout, Size{0, 0}};
+-    CheckLabel deinterlace{&ppuLayout, Size{0, 0}};
+-    CheckLabel noSpriteLimit{&ppuLayout, Size{0, 0}};
+-  //
+-  Label mode7Label{this, Size{~0, 0}, 2};
+-  HorizontalLayout mode7Layout{this, Size{~0, 0}};
+-    Label mode7ScaleLabel{&mode7Layout, Size{0, 0}};
+-    ComboButton mode7Scale{&mode7Layout, Size{0, 0}};
+-    CheckLabel mode7Perspective{&mode7Layout, Size{0, 0}};
+-    CheckLabel mode7Supersample{&mode7Layout, Size{0, 0}};
+-    CheckLabel mode7Mosaic{&mode7Layout, Size{0, 0}};
+-  //
+-  Label dspLabel{this, Size{~0, 0}, 2};
+-  HorizontalLayout dspLayout{this, Size{~0, 0}};
+-    CheckLabel fastDSP{&dspLayout, Size{0, 0}};
+-    CheckLabel cubicInterpolation{&dspLayout, Size{0, 0}};
+-  //
+-  Label coprocessorLabel{this, Size{~0, 0}, 2};
+-  HorizontalLayout coprocessorLayout{this, Size{~0, 0}};
+-    CheckLabel coprocessorDelayedSyncOption{&coprocessorLayout, Size{0, 0}};
+-    CheckLabel coprocessorPreferHLEOption{&coprocessorLayout, Size{0, 0}};
+-  Canvas coprocessorSpacer{this, Size{~0, 1}};
+-  //
+-  Label gameLabel{this, Size{~0, 0}, 2};
+-  CheckLabel hotfixes{this, Size{0, 0}};
++    Label mode7Label{this, Size{~0, 0}, 2};
++    HorizontalLayout hdALayout{this, Size{~0, 0}};
++      Label mode7ScaleLabel{&hdALayout, Size{0, 0}};
++      ComboButton mode7Scale{&hdALayout, Size{0, 0}};
++      Label mode7PerspectiveLabel{&hdALayout, Size{0, 0}};
++      ComboButton mode7Perspective{&hdALayout, Size{0, 0}};
++      Label mode7MosaicLabel{&hdALayout, Size{0, 0}};
++      ComboButton mode7Mosaic{&hdALayout, Size{0, 0}};
++      Label mode7SupersampleLabel{&hdALayout, Size{0, 0}};
++      ComboButton mode7Supersample{&hdALayout, Size{0, 0}};
++    HorizontalLayout hdBLayout{this, Size{~0, 0}};
++      Label wsModeLabel{&hdBLayout, Size{0, 0}};
++      ComboButton wsMode{&hdBLayout, Size{0, 0}};
++      Label mode7WidescreenLabel{&hdBLayout, Size{0, 0}};
++      ComboButton mode7Widescreen{&hdBLayout, Size{0, 0}};
++      Label wsBgColLabel{&hdBLayout, Size{0, 0}};
++      ComboButton wsBgCol{&hdBLayout, Size{0, 0}};
++      Label wsMarkerLabel{&hdBLayout, Size{0, 0}};
++      ComboButton wsMarker{&hdBLayout, Size{0, 0}};
++      Label wsMarkerAlphaLabel{&hdBLayout, Size{0, 0}};
++      ComboButton wsMarkerAlpha{&hdBLayout, Size{0, 0}};
++    HorizontalLayout hdCLayout{this, Size{~0, 0}};
++      Label wsBG1Label{&hdCLayout, Size{0, 0}};
++      ComboButton wsBG1{&hdCLayout, Size{0, 0}};
++      Label wsBG2Label{&hdCLayout, Size{0, 0}};
++      ComboButton wsBG2{&hdCLayout, Size{0, 0}};
++      Label wsBG3Label{&hdCLayout, Size{0, 0}};
++      ComboButton wsBG3{&hdCLayout, Size{0, 0}};
++      Label wsBG4Label{&hdCLayout, Size{0, 0}};
++      ComboButton wsBG4{&hdCLayout, Size{0, 0}};
++      Label wsObjLabel{&hdCLayout, Size{0, 0}};
++      ComboButton wsObj{&hdCLayout, Size{0, 0}};
++    HorizontalLayout hdDLayout{this, Size{~0, 0}};
++      Label igwinLabel{&hdDLayout, Size{0, 0}};
++      ComboButton igwin{&hdDLayout, Size{0, 0}};
++      Label igwinxLabel{&hdDLayout, Size{0, 0}};
++      ComboButton igwinx{&hdDLayout, Size{0, 0}};
++      Label bgGradLabel{&hdDLayout, Size{0, 0}};
++      ComboButton bgGrad{&hdDLayout, Size{0, 0}};
++      Label windRadLabel{&hdDLayout, Size{0, 0}};
++      ComboButton windRad{&hdDLayout, Size{0, 0}};
++
++  HorizontalLayout bottomLayout{this, Size{~0, 0}};
++    //
++    VerticalLayout coprocessorVLayout{&bottomLayout, Size{~0, 0}};
++      Label coprocessorLabel{&coprocessorVLayout, Size{~0, 0}, 2};
++      HorizontalLayout coprocessorLayout{&coprocessorVLayout, Size{~0, 0}};
++        CheckLabel coprocessorDelayedSyncOption{&coprocessorLayout, Size{0, 0}};
++        CheckLabel coprocessorPreferHLEOption{&coprocessorLayout, Size{0, 0}};
++    //
++    VerticalLayout gameVLayout{&bottomLayout, Size{~0, 0}};
++      Label gameLabel{&gameVLayout, Size{~0, 0}, 2};
++      CheckLabel hotfixes{&gameVLayout, Size{0, 0}};
++
+   //
+   Widget spacer{this, Size{~0, ~0}};
+   Label note{this, Size{~0, 0}};
+diff --git a/bsnes/target-bsnes/settings/video.cpp b/bsnes/target-bsnes/settings/video.cpp
+index bdd677697..ccbb61a2b 100644
+--- a/bsnes/target-bsnes/settings/video.cpp
++++ b/bsnes/target-bsnes/settings/video.cpp
+@@ -10,24 +10,24 @@ auto VideoSettings::create() -> void {
+   luminanceSlider.setLength(101).setPosition(settings.video.luminance).onChange([&] {
+     string value = {luminanceSlider.position(), "%"};
+     settings.video.luminance = value.natural();
++    emulator->configure("Video/Luminance", settings.video.luminance);
+     luminanceValue.setText(value);
+-    program.updateVideoPalette();
+   }).doChange();
+   saturationLabel.setText("Saturation:");
+   saturationValue.setAlignment(0.5);
+   saturationSlider.setLength(201).setPosition(settings.video.saturation).onChange([&] {
+     string value = {saturationSlider.position(), "%"};
+     settings.video.saturation = value.natural();
++    emulator->configure("Video/Saturation", settings.video.saturation);
+     saturationValue.setText(value);
+-    program.updateVideoPalette();
+   }).doChange();
+   gammaLabel.setText("Gamma:");
+   gammaValue.setAlignment(0.5);
+   gammaSlider.setLength(101).setPosition(settings.video.gamma - 100).onChange([&] {
+     string value = {100 + gammaSlider.position(), "%"};
+     settings.video.gamma = value.natural();
++    emulator->configure("Video/Gamma", settings.video.gamma);
+     gammaValue.setText(value);
+-    program.updateVideoPalette();
+   }).doChange();
+ 
+   dimmingOption.setText("Dim video when idle").setToolTip(
+diff --git a/ruby/audio/alsa.cpp b/ruby/audio/alsa.cpp
+index b5c847531..dd0ffc83f 100755
+--- a/ruby/audio/alsa.cpp
++++ b/ruby/audio/alsa.cpp
+@@ -6,7 +6,10 @@ struct AudioALSA : AudioDriver {
+   ~AudioALSA() { terminate(); }
+ 
+   auto create() -> bool override {
+-    super.setDevice(hasDevices().first());
++    auto devices = hasDevices();
++    string device = devices ? devices.first() : "";
++    if(device == "null") device = "default";
++    super.setDevice(device);
+     super.setChannels(2);
+     super.setFrequency(48000);
+     super.setLatency(20);

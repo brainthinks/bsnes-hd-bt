@@ -14,6 +14,8 @@ auto Configuration::process(Markup::Node document, bool load) -> void {
   bind(natural, "System/PPU2/Version", system.ppu2.version);
   bind(text,    "System/Serialization/Method", system.serialization.method);
 
+  bind(boolean, "Video/AspectCorrection", video.aspectCorrection);
+  bind(boolean, "Video/Overscan", video.overscan);
   bind(boolean, "Video/BlurEmulation", video.blurEmulation);
   bind(boolean, "Video/ColorEmulation", video.colorEmulation);
   bind(natural, "Video/Luminance", video.luminance);
@@ -43,6 +45,16 @@ auto Configuration::process(Markup::Node document, bool load) -> void {
   bind(natural, "Hacks/PPU/HDMode7/SsFactor", hacks.ppu.hdMode7.ssFactor);
   bind(boolean, "Hacks/PPU/HDMode7/Mosaic", hacks.ppu.hdMode7.mosaic);
   bind(boolean, "Hacks/PPU/HDMode7/GpuSupersample", hacks.ppu.hdMode7.gpuSupersample);
+  bind(natural, "Hacks/PPU/HDMode7/WsMode", hacks.ppu.hdMode7.wsMode);
+  bind(natural, "Hacks/PPU/HDMode7/Widescreen", hacks.ppu.hdMode7.widescreen);
+  bind(natural, "Hacks/PPU/HDMode7/Wsbg1", hacks.ppu.hdMode7.wsbg1);
+  bind(natural, "Hacks/PPU/HDMode7/Wsbg2", hacks.ppu.hdMode7.wsbg2);
+  bind(natural, "Hacks/PPU/HDMode7/Wsbg3", hacks.ppu.hdMode7.wsbg3);
+  bind(natural, "Hacks/PPU/HDMode7/Wsbg4", hacks.ppu.hdMode7.wsbg4);
+  bind(natural, "Hacks/PPU/HDMode7/WsObj", hacks.ppu.hdMode7.wsobj);
+  bind(natural, "Hacks/PPU/HDMode7/IgWin", hacks.ppu.hdMode7.igwin);
+  bind(natural, "Hacks/PPU/HDMode7/IgWinX", hacks.ppu.hdMode7.igwinx);
+  bind(natural, "Hacks/PPU/HDMode7/WsBgCol", hacks.ppu.hdMode7.wsBgCol);
   bind(boolean, "Hacks/DSP/Fast", hacks.dsp.fast);
   bind(boolean, "Hacks/DSP/Cubic", hacks.dsp.cubic);
   bind(boolean, "Hacks/DSP/EchoShadow", hacks.dsp.echoShadow);

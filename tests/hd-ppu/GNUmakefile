@@ -1,5 +1,5 @@
 compiler ?= g++
-flags := -std=c++17 -O2 -Wall -Wextra -I../../bsnes/sfc/ppu-hd
+flags := -std=c++17 -O2 -Wall -Wextra -I../../bsnes/sfc/ppu-hd -I../../bsnes
 libs :=
 shader := ../../ruby/video/opengl/shaders.hpp
 

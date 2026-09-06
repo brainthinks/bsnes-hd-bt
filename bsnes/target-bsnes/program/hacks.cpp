@@ -76,6 +76,12 @@ auto Program::hackCompatibility() -> void {
   emulator->configure("Hacks/PPU/HDMode7/SsFactor", settings.emulator.hack.ppu.hdMode7.ssFactor);
   emulator->configure("Hacks/PPU/HDMode7/Mosaic", settings.emulator.hack.ppu.hdMode7.mosaic);
   emulator->configure("Hacks/PPU/HDMode7/GpuSupersample", settings.emulator.hack.ppu.hdMode7.gpuSupersample);
+  emulator->configure("Hacks/PPU/HDMode7/WsMode", settings.emulator.hack.ppu.hdMode7.wsMode);
+  emulator->configure("Hacks/PPU/HDMode7/Widescreen", settings.emulator.hack.ppu.hdMode7.widescreen);
+  emulator->configure("Hacks/PPU/HDMode7/Wsbg1", settings.emulator.hack.ppu.hdMode7.wsbg1);
+  emulator->configure("Hacks/PPU/HDMode7/Wsbg2", settings.emulator.hack.ppu.hdMode7.wsbg2);
+  emulator->configure("Hacks/PPU/HDMode7/Wsbg3", settings.emulator.hack.ppu.hdMode7.wsbg3);
+  emulator->configure("Hacks/PPU/HDMode7/Wsbg4", settings.emulator.hack.ppu.hdMode7.wsbg4);
   emulator->configure("Hacks/DSP/Fast", fastDSP);
   emulator->configure("Hacks/DSP/Cubic", settings.emulator.hack.dsp.cubic);
   emulator->configure("Hacks/Coprocessor/DelayedSync", coprocessorDelayedSync);
