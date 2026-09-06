@@ -150,43 +150,104 @@ private:
 // whatever stores into the buffer is the routine. Cheaper and far more certain
 // than reading a disassembly hoping to recognise it.
 struct WriteWatch {
-  auto enabled() -> bool {
+  auto enabled(const char* variable = "BSNES_WATCH_WRITE", bool reads = false,
+               bool byPc = false) -> bool {
     if(state < 0) {
       state = 0;
-      if(auto spec = getenv("BSNES_WATCH_WRITE")) {
+      if(auto spec = getenv(variable)) {
         char* end = nullptr;
         low = (unsigned)strtoul(spec, &end, 16);
         if(end && *end == '-') high = (unsigned)strtoul(end + 1, nullptr, 16);
-        if(high >= low) { state = 1; atexit(reportAtExit); }
+        if(high >= low) {
+          counts = (uint32_t*)calloc(Space, sizeof(uint32_t));
+          if(counts) {
+            state = 1;
+            inverted = byPc;
+            kind = byPc ? "addresses read by" : reads ? "reads of" : "writes to";
+            atexit(reads ? reportReadsAtExit : reportAtExit);
+          }
+        }
       }
     }
     return state == 1;
   }
 
+  // Normally: which code touched this memory. Inverted: which memory this code
+  // touched, which is how a routine's inputs get named without reading it.
+  //
+  // Counting into an array indexed by the whole 24-bit space rather than a list
+  // of what has been seen. A list has to be searched on every memory access,
+  // and this is called millions of times a second; it also silently truncates
+  // once it fills, which turns "here is everything the routine reads" into
+  // "here are the first N", a difference that does not announce itself.
   auto note(unsigned address, unsigned pc) -> void {
-    if(address < low || address > high) return;
-    for(unsigned n = 0; n < seen; n++) {
-      if(sites[n].pc == pc) { sites[n].count++; return; }
-    }
-    if(seen < Max) sites[seen++] = {pc, 1};
+    unsigned key = inverted ? address : pc;
+    unsigned filter = inverted ? pc : address;
+    if(filter < low || filter > high) return;
+    //when asking what a routine reads, its own bytes are instruction fetches
+    //rather than inputs, and they would crowd out everything worth seeing
+    if(inverted && address >= low && address <= high) return;
+    auto& count = counts[key & (Space - 1)];
+    if(!count) seen++;
+    count++;
   }
 
   auto report() -> void {
     if(state != 1 || !seen) return;
-    fprintf(stderr, "[watch] writes to %06x-%06x came from %u places:\n", low, high, seen);
-    for(unsigned n = 0; n < seen; n++) {
-      fprintf(stderr, "  %02x:%04x  %u writes\n",
-        sites[n].pc >> 16 & 0xff, sites[n].pc & 0xffff, sites[n].count);
-    }
+    fprintf(stderr, "[watch] %s %06x-%06x: %u distinct addresses\n", kind, low, high, seen);
+    inverted ? reportRegions() : reportSites();
   }
 
 private:
-  static constexpr unsigned Max = 64;
-  struct Site { unsigned pc, count; };
-  static auto reportAtExit() -> void;
+  static constexpr unsigned Space = 1u << 24;
 
-  Site sites[Max] = {};
+  // The answer to "what does this code read" is thousands of addresses in runs,
+  // so print the runs. Which class of memory they land in is the first thing
+  // worth knowing: cartridge means the routine decodes data that an asset
+  // extractor would have to pull out, work RAM means it does not.
+  auto reportRegions() -> void {
+    unsigned cartridge = 0, ram = 0, other = 0;
+    for(unsigned n = 0; n < Space; n++) {
+      if(!counts[n]) continue;
+      auto bank = n >> 16, within = n & 0xffff;
+      bool rom = (bank < 0x40 || (bank >= 0x80 && bank < 0xc0)) ? within >= 0x8000 : bank >= 0xc0;
+      bool wram = bank == 0x7e || bank == 0x7f
+               || ((bank < 0x40 || (bank >= 0x80 && bank < 0xc0)) && within < 0x2000);
+      wram ? ram++ : rom ? cartridge++ : other++;
+    }
+    fprintf(stderr, "  cartridge %u, work RAM %u, other %u\n", cartridge, ram, other);
+
+    unsigned printed = 0;
+    for(unsigned n = 0; n < Space; ) {
+      if(!counts[n]) { n++; continue; }
+      unsigned first = n, hits = 0;
+      //runs stop at bank boundaries, or a region would print with a start and
+      //end in different banks and read as nonsense
+      while(n < Space && counts[n] && (n >> 16) == (first >> 16)) hits += counts[n++];
+      if(printed++ < Limit) {
+        fprintf(stderr, "  %02x:%04x-%04x  %u bytes, %u reads\n",
+          first >> 16 & 0xff, first & 0xffff, (n - 1) & 0xffff, n - first, hits);
+      }
+    }
+    if(printed > Limit) fprintf(stderr, "  ... and %u more regions\n", printed - Limit);
+  }
+
+  auto reportSites() -> void {
+    for(unsigned n = 0; n < Space; n++) {
+      if(!counts[n]) continue;
+      fprintf(stderr, "  %02x:%04x  %u times\n", n >> 16 & 0xff, n & 0xffff, counts[n]);
+    }
+  }
+
+  static constexpr unsigned Limit = 400;
+public:
+  static auto reportAtExit() -> void;
+  static auto reportReadsAtExit() -> void;
+
+  uint32_t* counts = nullptr;
+  const char* kind = "writes to";
   unsigned seen = 0, low = 0, high = 0;
+  bool inverted = false;
   int state = -1;
 };
 
@@ -278,15 +339,79 @@ inline auto watch() -> WriteWatch& {
   return instance;
 }
 
+// The same question asked of reads: which code consumes a range. Between the
+// two, a routine's inputs and outputs can be named without reading a line of
+// its disassembly.
+inline auto readWatch() -> WriteWatch& {
+  static WriteWatch instance;
+  return instance;
+}
+
 inline auto WriteWatch::reportAtExit() -> void { watch().report(); }
 
 inline auto watching() -> bool { return watch().enabled(); }
 inline auto watchWrite(unsigned address, unsigned pc) -> void { watch().note(address, pc); }
+inline auto watchingReads() -> bool { return readWatch().enabled("BSNES_WATCH_READ", true); }
+inline auto watchRead(unsigned address, unsigned pc) -> void { readWatch().note(address, pc); }
+
+// BSNES_WATCH_READS_BY=039243-039488: what a stretch of code reads.
+inline auto inputWatch() -> WriteWatch& {
+  static WriteWatch instance;
+  return instance;
+}
+inline auto watchingInputs() -> bool {
+  return inputWatch().enabled("BSNES_WATCH_READS_BY", true, true);
+}
+inline auto watchInput(unsigned address, unsigned pc) -> void { inputWatch().note(address, pc); }
+
+inline auto WriteWatch::reportReadsAtExit() -> void { readWatch().report(); inputWatch().report(); }
 
 inline auto recorder() -> Recorder& {
   static Recorder instance;
   return instance;
 }
+
+// Snapshot RAM at a routine's entry rather than at the end of a frame.
+//
+// End-of-frame RAM cannot supply a mid-frame routine's inputs. A routine reads
+// variables that later code in the same frame overwrites, so by the time the
+// frame ends the values it actually ran on are gone -- and a port fed the
+// end-of-frame values computes something the original never computed. The
+// course streamer is the case that forced this: its cursor is set up just
+// before it runs and reset just after, and neither the previous frame's RAM nor
+// this frame's contains what it read.
+//
+// Triggering the same recorder on a program counter instead fixes that. Each
+// record is the machine exactly as the routine found it, so a port can be fed
+// its true inputs, and the record that follows holds what the routine produced.
+//
+//   BSNES_TRACE_RAM_AT=03939e   with BSNES_TRACE_RAM as usual
+struct EntryTrigger {
+  auto enabled() -> bool {
+    if(state < 0) {
+      state = 0;
+      if(auto spec = getenv("BSNES_TRACE_RAM_AT")) {
+        pc = (unsigned)strtoul(spec, nullptr, 16);
+        state = 1;
+      }
+    }
+    return state == 1;
+  }
+
+  auto matches(unsigned address) const -> bool { return address == pc; }
+
+private:
+  unsigned pc = 0;
+  int state = -1;
+};
+
+inline auto entryTrigger() -> EntryTrigger& {
+  static EntryTrigger instance;
+  return instance;
+}
+
+inline auto snapshotting() -> bool { return entryTrigger().enabled(); }
+inline auto atEntry(unsigned pc) -> bool { return entryTrigger().matches(pc); }
 
 inline auto Recorder::closeAtExit() -> void { recorder().close(); }
 

@@ -11,6 +11,8 @@ auto CPU::read(uint address) -> uint8 {
   //BSNES_TRACE_EXEC also maps what the cartridge is read for, which is where
   //the game's data lives and therefore what an extractor has to pull out
   if(RamTrace::tracingExec()) RamTrace::noteRead(address);
+  if(RamTrace::watchingReads()) RamTrace::watchRead(address, r.pc.d);
+  if(RamTrace::watchingInputs()) RamTrace::watchInput(address, r.pc.d);
   if(address & 0x408000) {
     if(address & 0x800000 && io.fastROM) {
       status.clockCount = 6;
