@@ -309,7 +309,7 @@ static auto testPacking() -> void {
   };
 
   build(3, 11);
-  auto grid = HdToolkit::panoramaGrid(panorama, map, 11, 17);
+  auto grid = HdToolkit::panoramaGrid(panorama, map, 32, 0, 11, 17);
   CHECK(grid.count == 3);
   CHECK(grid.base == 11);
   CHECK(grid.height == 7);
@@ -345,7 +345,7 @@ static auto testPacking() -> void {
       }
     }
   }
-  auto shortLoop = HdToolkit::panoramaGrid(panorama, map, 4, 10);
+  auto shortLoop = HdToolkit::panoramaGrid(panorama, map, 32, 0, 4, 10);
   CHECK(shortLoop.base == 4);
   CHECK(shortLoop.count == 4);
   CHECK(shortLoop.lastSpan == 128);
@@ -355,13 +355,45 @@ static auto testPacking() -> void {
   CHECK(HdToolkit::panoramaAdjust(shortLoop, 11, -1, h, v));
   CHECK(h == 256 && v == -7 * 8);
 
+  // Super Mario Kart's shape: four four-row windows on a 64x64 tilemap, in
+  // mode 0 on BG3. Rows 32..63 of such a map live at a separate word offset.
+  {
+    for(unsigned n = 0; n < 32768; n++) panorama[n] = 0;
+    constexpr unsigned tiles = 128;  //1024 pixels
+    auto put = [&](unsigned half, unsigned row, unsigned col, unsigned short v) {
+      unsigned off = (row & 31) * 32 + (col & 31);
+      if(half) off += 1024;
+      if(row & 32) off += 2048;
+      panorama[(map + off) & 0x7fff] = v;
+    };
+    for(unsigned window = 0; window < 4; window++) {
+      for(unsigned y = 0; y < 4; y++) for(unsigned x = 0; x < 32; x++) {
+        unsigned row = 40 + window * 4 + y;   //rows 40..55, past the 32-row split
+        put(0, row, x, 1 + y * 256 + (window * 32 + x) % tiles);
+        put(1, row, x, 1 + y * 256 + (window * 32 + 32 + x) % tiles);
+      }
+    }
+  }
+  auto wide = HdToolkit::panoramaGrid(panorama, map, 64, 2048, 40, 44);
+  CHECK(wide.base == 40);
+  CHECK(wide.height == 4);
+  CHECK(wide.count == 4);
+  CHECK(wide.lastSpan == 256);
+  CHECK(wide.length() == 1024);
+  CHECK(HdToolkit::panoramaAdjust(wide, 40, -1, h, v));
+  CHECK(h == 256 && v == 3 * 4 * 8);
+  CHECK(HdToolkit::panoramaAdjust(wide, 44, -1, h, v));
+  CHECK(h == 256 && v == -4 * 8);
+  // A 64-row map is not searched as if it were 32 rows.
+  CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 8, 12).count == 0);
+
   // An ordinary background is not a panorama.
   unsigned short plain[32768] = {};
   for(unsigned n = 0; n < 2048; n++) plain[map + n] = 1 + n;
-  CHECK(HdToolkit::panoramaGrid(plain, map, 11, 17).count == 0);
-  CHECK(!HdToolkit::panoramaAdjust(HdToolkit::panoramaGrid(plain, map, 11, 17), 11, -1, h, v));
+  CHECK(HdToolkit::panoramaGrid(plain, map, 32, 0, 11, 17).count == 0);
+  CHECK(!HdToolkit::panoramaAdjust(HdToolkit::panoramaGrid(plain, map, 32, 0, 11, 17), 11, -1, h, v));
   // A band straddling the tilemap's vertical wrap is rejected.
-  CHECK(HdToolkit::panoramaGrid(panorama, map, 30, 3).count == 0);
+  CHECK(HdToolkit::panoramaGrid(panorama, map, 32, 0, 30, 3).count == 0);
 
 }
 

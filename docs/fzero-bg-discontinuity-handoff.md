@@ -19,12 +19,22 @@ further on**. That is what makes the hardware's ordinary 512-pixel wrap draw a
 continuous picture: past `hoffset` 255 the fetch crosses into the second half,
 which is already the next window.
 
-Measured on `Quick/Slot 3`, driving a full 360 degrees in both directions:
+**Super Mario Kart** does the same thing on different layers: mode 0, BG3 and
+BG4 on a 64x64 tilemap, four-row windows. Its horizon does not scroll by
+`hoffset` alone -- `voffset` picks the window exactly as F-Zero's does.
 
-| Layer | tilemap rows | windows | window height | panorama length |
-|---|---|---|---|---|
-| BG1 (near) | 4..31 | 4 | 7 rows (56 px) | **896 px** |
-| BG2 (far)  | 11..31 | 3 | 7 rows (56 px) | **768 px** |
+Measured driving a full 360 degrees in both directions (F-Zero `Quick/Slot 3`,
+Mario Kart `Quick/Slot 2`):
+
+| Game | Layer | mode | map | windows | window height | panorama length |
+|---|---|---|---|---|---|---|
+| F-Zero | BG1 (near) | 1 | 64x32 | 4 | 7 rows (56 px) | **896 px** |
+| F-Zero | BG2 (far)  | 1 | 64x32 | 3 | 7 rows (56 px) | 768 px |
+| Mario Kart | BG3 | 0 | 64x64 | 4 | 4 rows (32 px) | 1024 px |
+| Mario Kart | BG4 | 0 | 64x64 | 2 | 4 rows (32 px) | 512 px |
+
+Mario Kart's BG2 is a static far sky at `hoffset` 0 whose second tilemap half is
+empty; no grid fits it and it keeps ordinary wrapping.
 
 BG1's loop is **not** a whole number of windows. Its fourth window only ever
 uses `hoffset` 0..127, and `half0` window 3 columns 16..31 are byte-identical to
@@ -45,6 +55,10 @@ leaves the wrap target half-written. F-Zero's BG1 got no correction at all in
 two of its four windows, so those columns fell back to plain wrapping and drew
 the wrong window.
 
+In Mario Kart the same gap showed as trees popping in and out of the widescreen
+extension: nothing had ever claimed those layers, so the extension drew whatever
+stale columns the game had left in the far half of the tilemap.
+
 Exhaustively, over every window and every one of the 256 scroll positions:
 
 | Layer | old | new |
@@ -63,11 +77,20 @@ longer carries the machinery they implied:
 
 ## What the fix does
 
-`HdToolkit::panoramaGrid` fits the window grid — base row, rows per window,
-window count, and the length of the loop — to the tilemap, and declines unless
-at least two windows confirm it against the actual tile words. Nothing is keyed
-to a game or a ROM; a background that is not laid out this way gets `count == 0`
-and is rendered exactly as before.
+`HdToolkit::panoramaGrid` derives the window grid — base row, rows per window,
+window count, and the length of the loop — from the tilemap, and declines unless
+at least two windows confirm it against the actual tile words. It is not a
+search: away from the wrap, the second half of row r repeats the first half of
+row r + height, so each candidate spacing leaves a run of rows with that
+property, and the run's start and length give the base, the height and the
+window count directly.
+
+Every ordinary 8x8 background on a 64-tile-wide tilemap is offered to it, on any
+layer and in any non-hires, non-offset-per-tile mode; a 32-tile-wide map has no
+second half to hold the next window. Nothing is keyed to a game or a ROM: a
+background that is not laid out this way gets `count == 0` and is rendered
+exactly as before, and each scanline resolves its own window, so a visible band
+that crosses from one window into the next stays correct.
 
 `HdToolkit::panoramaAdjust` then addresses each **widescreen** column through
 the panorama rather than through the tilemap: it works out which window holds
@@ -88,18 +111,19 @@ touched: whatever the hardware's own wrapping draws there is the picture.
   `renderX < 0` or `renderX >= 256`, in 20 of 152 sampled frames across two full
   360-degree sweeps.
 * `tests/hd-ppu`: 149 passed, 0 failed, including a 4-window short loop.
-* Super Mario Kart, Pilotwings, Castlevania IV, Contra III, Axelay, FF6, Chrono
-  Trigger, Yoshi's Island, Super Metroid, Star Fox, Demon's Crest and the
-  widescreen-patched Metroid/SMW hacks: the grid never fits, so the path never
-  engages and nothing changes.
+* Mario Kart: 17 of 51 frames across a full turn change, every changed column in
+  the extension, none inside the picture. The trees stop popping.
+* Every other ROM to hand -- Pilotwings, Castlevania IV, Contra III, Axelay,
+  FF6, Chrono Trigger, Yoshi's Island, Super Metroid (and its widescreen hacks),
+  Super Mario World widescreen, Star Fox, Demon's Crest, Doom, Gradius III,
+  Bahamut Lagoon, Skuljagger: byte-identical with and without the path. (Two
+  games first appeared to differ; that was the auto-saved `.srm` diverging
+  between consecutive runs, and they are identical when each run starts from the
+  same save file.)
 
 ## Not settled
 
-* **Super Mario Kart's race horizon is a different mechanism**, not this one:
-  BG1 on a 32x32 map with per-scanline HDMA `hoffset`/`voffset`, and BG2 static
-  at `hoffset` 0 on a 64x64 map. Its widescreen horizon renders continuous
-  today; if a seam is found there it needs its own investigation.
-* BG1's *right* extension only needs the wrap case when `hoffset >= 193` in the
+* F-Zero BG1's *right* extension only needs the wrap case when `hoffset >= 193` in the
   short window, which the game never reaches on this track. That path is
   implemented and unit-tested but has not been seen on screen.
 * A band straddling the tilemap's own vertical wrap (`last < first`) still keeps
@@ -122,6 +146,13 @@ the other debug hooks.
 | `BSNES_DUMP_VRAM_BIN=<prefix>` | raw VRAM + CGRAM at the same frames |
 | `BSNES_FRAME_DIR` + `BSNES_FRAME_AT` | frames as PPM |
 | `BSNES_NO_PAN=1` | disable the panorama path, for A/B |
+| `BSNES_HEADLESS=1` | skip presenting frames; PPU dumps still happen |
+| `BSNES_TIME_FRAME=1` | per-frame wall-clock breakdown |
 
 Driving F-Zero: `B` accelerates; steering only turns the car while it is moving.
 `"30:b,150:b+right"` from `Quick/Slot 3` sweeps a full 360 degrees repeatedly.
+Mario Kart: `Quick/Slot 2` is paused, so `"30:b,120:b+left"` resumes and turns.
+
+`BSNES_HEADLESS=1` matters for measurement: on this machine `video.output()`
+blocks for about a second per frame at HD Mode 7 scale 8, which has nothing to do
+with the PPU and makes unattended runs unusable without it.

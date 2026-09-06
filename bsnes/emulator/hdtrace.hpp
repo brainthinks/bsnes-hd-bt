@@ -73,6 +73,28 @@ namespace HdTrace {
     return input < 12 && (held >> input & 1) ? 1 : 0;
   }
 
+  //BSNES_HEADLESS=1: skip presenting the frame. Measurement runs still get the
+  //PPU's own frame dumps, without waiting on the host's compositor.
+  inline auto headless() -> bool {
+    static int on = -1;
+    if(on < 0) on = getenv("BSNES_HEADLESS") ? 1 : 0;
+    return on == 1;
+  }
+
+  //BSNES_NO_PAN=1: ignore panorama layouts and use plain hardware wrapping, to
+  //A/B the widescreen extension against the previous behaviour.
+  inline auto noPanoramas() -> bool {
+    static int on = -1;
+    if(on < 0) on = getenv("BSNES_NO_PAN") ? 1 : 0;
+    return on == 1;
+  }
+
+  inline auto timing() -> bool {
+    static int on = -1;
+    if(on < 0) on = getenv("BSNES_TIME_FRAME") ? 1 : 0;
+    return on == 1;
+  }
+
   inline auto quitAfter() -> unsigned {
     static unsigned n = 0xffffffffu;
     if(n == 0xffffffffu) {

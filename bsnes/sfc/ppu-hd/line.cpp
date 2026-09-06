@@ -218,9 +218,9 @@ auto PPU::Line::flush() -> void {
         }
         for(uint y : {8u, 16u, 20u, 24u, 32u, 40u}) {
           auto& L = ppu.lines[y];
-          PPU::IO::Background* bgs[2] = {&L.io.bg1, &L.io.bg2};
+          PPU::IO::Background* bgs[4] = {&L.io.bg1, &L.io.bg2, &L.io.bg3, &L.io.bg4};
           fprintf(fp, "  y=%u mode=%u", y, (unsigned)L.io.bgMode);
-          for(uint i = 0; i < 2; i++) {
+          for(uint i = 0; i < 4; i++) {
             auto& b = *bgs[i];
             fprintf(fp, " | BG%u tm=%u ts=%u ss=%u sa=%u h=%u v=%u en=%d%d windows=%d/len=%d",
               i + 1, (unsigned)b.tileMode, (unsigned)b.tileSize, (unsigned)b.screenSize,

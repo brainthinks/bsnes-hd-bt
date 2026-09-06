@@ -87,61 +87,72 @@ namespace HdToolkit {
     auto length() const -> int { return (int)(256 * (count - 1) + lastSpan); }
   };
 
+  // `rows` is the tilemap's height in tiles (32 or 64) and `screenY` the word
+  // offset where rows 32..63 of a 64-row map live, matching getTile().
+  //
+  // The grid is derived, not searched. Away from the wrap, the second half of
+  // row r holds the same tiles as the first half of row r + height, so the run
+  // of rows with that property is the panorama minus its last window: its
+  // length gives the height and the window count, and its start gives the base.
   inline auto panoramaGrid(const unsigned short* vram, unsigned address,
-    unsigned first, unsigned last) -> PanoramaGrid {
+    unsigned rows, unsigned screenY, unsigned first, unsigned last) -> PanoramaGrid {
     PanoramaGrid none;
-    if(last < first || last > 31) return none;
+    if(last < first || last >= rows || rows > 64) return none;
 
-    unsigned hash[2][32];
-    bool detail[32];
+    auto word = [&](unsigned half, unsigned row, unsigned column) -> unsigned short {
+      unsigned offset = (row & 31) * 32 + (column & 31);
+      if(half) offset += 1024;
+      if(row & 32) offset += screenY;
+      return vram[(address + offset) & 0x7fff];
+    };
+
+    unsigned hash[2][64];
+    bool detail[64];
     for(unsigned half = 0; half < 2; half++) {
-      for(unsigned row = 0; row < 32; row++) {
-        unsigned base = address + half * 1024 + row * 32;
-        unsigned short leftmost = vram[base & 0x7fff];
+      for(unsigned row = 0; row < rows; row++) {
+        unsigned short leftmost = word(half, row, 0);
         unsigned h = 2166136261u;
         bool varies = false;
         for(unsigned x = 0; x < 32; x++) {
-          unsigned short word = vram[(base + x) & 0x7fff];
-          if(word != leftmost) varies = true;
-          h = (h ^ word) * 16777619u;
+          unsigned short tile = word(half, row, x);
+          if(tile != leftmost) varies = true;
+          h = (h ^ tile) * 16777619u;
         }
         hash[half][row] = h;
         if(!half) detail[row] = varies;
       }
     }
 
+    //Away from the wrap, the second half of row r repeats the first half of row
+    //r + height, so each candidate spacing leaves a run of rows with that
+    //property: the panorama minus its last window. Walk those runs. A row of
+    //flat sky repeats almost anything, so a run has to carry some detail.
     PanoramaGrid best;
-    unsigned bestGood = 0, bestSpan = 0;
+    unsigned bestSpan = 0;
     for(unsigned height = 2; height <= 16; height++) {
-      for(unsigned count = 2; count * height <= 32; count++) {
-        unsigned span = height * count;
-        for(unsigned base = 0; base + span <= 32; base++) {
-          if(first < base || last >= base + span) continue;
-          unsigned good = 0, bad = 0;
-          for(unsigned band = 0; band < count; band++) {
-            bool matches = true, hasDetail = false;
-            for(unsigned i = 0; i < height; i++) {
-              unsigned row = base + band * height + i;
-              if(detail[row]) hasDetail = true;
-              if(hash[1][row] != hash[0][base + (row - base + height) % span]) matches = false;
-            }
-            if(!hasDetail) continue;  //an all-sky window proves nothing either way
-            matches ? good++ : bad++;
-          }
-          //one window may lag: a game that streams the panorama writes the
-          //upcoming window as it turns, so the wrap target is often stale
-          if(good < 2 || bad > 1) continue;
-          if(good > bestGood || (good == bestGood && span > bestSpan)) {
-            best = {base, height, count, 256};
-            bestGood = good;
-            bestSpan = span;
-          }
+      unsigned row = 0;
+      while(row < rows) {
+        if(row + height >= rows || hash[1][row] != hash[0][row + height]) { row++; continue; }
+        unsigned begin = row;
+        bool hasDetail = false;
+        while(row < rows && row + height < rows && hash[1][row] == hash[0][row + height]) {
+          if(detail[row]) hasDetail = true;
+          row++;
         }
+        unsigned run = row - begin;
+        if(!hasDetail || run % height) continue;
+        unsigned count = run / height + 1;  //the run omits the window that wraps
+        unsigned span = count * height;
+        if(count < 2 || begin + span > rows) continue;
+        if(first < begin || last >= begin + span) continue;  //must hold the visible band
+        if(span <= bestSpan) continue;
+        best = {begin, height, count, 256};
+        bestSpan = span;
       }
     }
     if(!best.count) return none;
 
-    //the search compared row hashes; confirm the winner against the tilemap
+    //the run was compared by row hash; confirm the whole grid against the tiles
     unsigned span = best.height * best.count;
     unsigned confirmed = 0;
     for(unsigned band = 0; band < best.count; band++) {
@@ -150,29 +161,28 @@ namespace HdToolkit {
         unsigned row = best.base + band * best.height + i;
         unsigned other = best.base + (row - best.base + best.height) % span;
         for(unsigned x = 0; x < 32; x++) {
-          if(vram[(address + 1024 + row * 32 + x) & 0x7fff]
-          != vram[(address + other * 32 + x) & 0x7fff]) { matches = false; break; }
+          if(word(1, row, x) != word(0, other, x)) { matches = false; break; }
         }
       }
       if(matches) confirmed++;
     }
-    if(confirmed < 2) return none;
+    //one window may lag: a game that streams the panorama writes the upcoming
+    //window as it turns, so the wrap target is often stale
+    if(confirmed + 1 < best.count) return none;
 
     //The panorama's length need not be a whole number of windows: F-Zero's
     //nearest layer closes after three and a half, so the last window's second
     //half repeats the first window's beginning. Recover that overlap from the
     //second half, which holds the panorama 256 pixels on from each window.
-    best.lastSpan = 256;
     for(unsigned shift = 1; shift < 32; shift++) {
       bool matches = true, hasDetail = false;
       for(unsigned i = 0; i < best.height && matches; i++) {
         unsigned from = best.base + (best.count - 1) * best.height + i;
         unsigned to = best.base + i;
         for(unsigned x = 0; x + shift < 32; x++) {
-          unsigned short a = vram[(address + 1024 + from * 32 + x) & 0x7fff];
-          unsigned short b = vram[(address + to * 32 + x + shift) & 0x7fff];
-          if(a != b) { matches = false; break; }
-          if(x && a != vram[(address + 1024 + from * 32) & 0x7fff]) hasDetail = true;
+          unsigned short a = word(1, from, x);
+          if(a != word(0, to, x + shift)) { matches = false; break; }
+          if(x && a != word(1, from, 0)) hasDetail = true;
         }
       }
       if(matches && hasDetail) { best.lastSpan = 256 - shift * 8; break; }

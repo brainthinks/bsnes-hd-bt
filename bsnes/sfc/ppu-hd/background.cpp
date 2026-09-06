@@ -1,4 +1,5 @@
 #include <emulator/hdtoolkit.hpp>
+#include <emulator/hdtrace.hpp>
 
 auto PPU::Line::cacheBackgroundPanoramas() -> void {
   for(uint n = 0; n < count; n++) {
@@ -9,35 +10,54 @@ auto PPU::Line::cacheBackgroundPanoramas() -> void {
     }
   }
   if(!ppu.widescreen() || ppu.wsOverride()) return;
-  if(getenv("BSNES_NO_PAN")) return;  //experiment: plain hardware wrapping only
-  // Mode 1's ordinary 8x8, 512-wide backgrounds. Offset-per-tile, hires,
-  // mosaic and Mode 7 continue to use their existing address calculations.
-  for(uint bg = 0; bg < 2; bg++) {
-    auto background = [&](Line& line) -> IO::Background& { return bg ? line.io.bg2 : line.io.bg1; };
+  if(HdTrace::noPanoramas()) return;
+
+  //Any ordinary 8x8 background on a 64-tile-wide tilemap can hold a panorama:
+  //F-Zero puts one on BG1 and BG2 in mode 1, Super Mario Kart on BG3 and BG4 in
+  //mode 0. A 32-tile-wide map has no second half to hold the next window, and
+  //offset-per-tile, hires, mosaic and Mode 7 keep their own address
+  //calculations, so all of those are left alone.
+  for(uint bg = 0; bg < 4; bg++) {
+    auto background = [&](Line& line) -> IO::Background& {
+      return bg == 0 ? line.io.bg1 : bg == 1 ? line.io.bg2 : bg == 2 ? line.io.bg3 : line.io.bg4;
+    };
+    auto usable = [&](Line& line) -> bool {
+      auto& b = background(line);
+      bool offsetPerTile = line.io.bgMode == 2 || line.io.bgMode == 4 || line.io.bgMode == 6;
+      bool hires = line.io.bgMode == 5 || line.io.bgMode == 6;
+      return !offsetPerTile && !hires
+          && b.tileMode != TileMode::Mode7 && b.tileMode != TileMode::Inactive
+          && !b.tileSize && (b.screenSize & 1) && !b.mosaicEnable
+          && (b.aboveEnable || b.belowEnable);
+    };
     uint n = 0;
     while(n < count) {
       auto& line = ppu.lines[start + n];
       auto& b = background(line);
-      if(line.io.bgMode != 1 || b.tileSize || b.screenSize != 1 || b.mosaicEnable
-      || (!b.aboveEnable && !b.belowEnable)) { n++; continue; }
+      if(!usable(line)) { n++; continue; }
       uint end = n + 1;
       while(end < count) {
         auto& next = ppu.lines[start + end];
         auto& nb = background(next);
-        if(next.io.bgMode != 1 || nb.tileSize || nb.screenSize != 1 || nb.mosaicEnable
-        || nb.screenAddress != b.screenAddress || nb.tiledataAddress != b.tiledataAddress
-        || nb.voffset != b.voffset || nb.aboveEnable != b.aboveEnable || nb.belowEnable != b.belowEnable) break;
+        if(!usable(next) || nb.screenAddress != b.screenAddress || nb.screenSize != b.screenSize
+        || nb.tiledataAddress != b.tiledataAddress || nb.voffset != b.voffset
+        || nb.aboveEnable != b.aboveEnable || nb.belowEnable != b.belowEnable) break;
         end++;
       }
-      uint first = ((line.y + b.voffset) & 255) >> 3;
-      uint last = ((ppu.lines[start + end - 1].y + b.voffset) & 255) >> 3;
-      //a band straddling the tilemap's own vertical wrap is not inside one
-      //panorama window, so it keeps ordinary hardware wrapping
+      uint rows = b.screenSize & 2 ? 64 : 32;
+      uint screenY = b.screenSize & 2 ? 32 << 5 + (b.screenSize & 1) : 0;  //rows 32..63
+      uint vmask = (rows << 3) - 1;
+      uint first = ((line.y + b.voffset) & vmask) >> 3;
+      uint last = ((ppu.lines[start + end - 1].y + b.voffset) & vmask) >> 3;
+      //a band straddling the tilemap's own vertical wrap keeps ordinary wrapping
       if(last >= first) {
-        auto grid = HdToolkit::panoramaGrid(ppu.vram, b.screenAddress, first, last);
+        auto grid = HdToolkit::panoramaGrid(ppu.vram, b.screenAddress, rows, screenY, first, last);
         for(uint i = n; i < end; i++) {
-          ppu.lines[start + i].panorama[bg] = grid;
-          ppu.lines[start + i].panoramaFirstRow[bg] = first;
+          auto& target = ppu.lines[start + i];
+          target.panorama[bg] = grid;
+          //each line resolves its own window: a visible band several tile rows
+          //tall can cross from one window into the next
+          target.panoramaFirstRow[bg] = ((target.y + b.voffset) & vmask) >> 3;
         }
       }
       n = end;

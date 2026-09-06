@@ -226,7 +226,9 @@ auto Program::videoFrame(const uint16* data, uint pitch, uint width, uint height
 
   uint filterWidth = width, filterHeight = height;
   auto filterRender = filterSelect(filterWidth, filterHeight, scale);
-  if(auto [output, length] = video.acquire(filterWidth, filterHeight); output) {
+  if(HdTrace::headless()) {
+    //measurement run: the PPU has already dumped what it needs
+  } else if(auto [output, length] = video.acquire(filterWidth, filterHeight); output) {
     filterRender(palette, output, length, (const uint16_t*)data, pitch << 1, width, height);
     video.release();
     video.output(outputWidth, outputHeight);
@@ -268,7 +270,9 @@ auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height
   uint outputWidth = width, outputHeight = height;
   viewportSize(outputWidth, outputHeight, scale);
 
-  if(auto [output, length] = video.acquire(width, height); output) {
+  if(HdTrace::headless()) {
+    //measurement run: the PPU has already dumped what it needs
+  } else if(auto [output, length] = video.acquire(width, height); output) {
     uint dstPitch = length >> 2;
     for(uint y : range(height)) {
       memory::copy<uint32>(output + y * dstPitch, data + y * pixelPitch, width);
@@ -297,6 +301,7 @@ auto Program::videoFrame(const uint32* data, uint pitch, uint width, uint height
 }
 
 auto Program::audioFrame(const double* samples, uint channels) -> void {
+  if(HdTrace::headless()) return;  //no audio device to pace against
   if(mute) {
     double silence[] = {0.0, 0.0};
     audio.output(silence);
