@@ -50,6 +50,34 @@ replaced, over highly repetitive city tiles. Watching the per-block destinations
 instead is a much better shot and has not been tried. Do not treat "cannot be
 stitched" as established.
 
+**The world position is a plain translation, and it is in RAM.** This was the
+load-bearing assumption; it holds. The Mode 7 offsets are the world position
+modulo 1024 — they slide smoothly as the car drives and wrap at 1024 (957 down
+to 64, then 972). Unwrapping them gives a continuous world position, and
+searching WRAM for a value that tracks it finds several with correlation
+**1.0000** and matching ranges. Checked as an exact relationship rather than a
+correlation, across 175 snapshots over 700 frames:
+
+| WRAM (F-Zero U) | tracks | offset from the unwrapped world coordinate |
+|---|---|---|
+| `$7E:00A8`, `$7E:00A2` | world X | constant 2688 |
+| `$7E:0B70` | world X | constant 3200 |
+| `$7E:00AA`, `$7E:0022` | world Y | constant 3504 |
+| `$7E:0EB8` | world Y | constant 0 |
+
+Constant across every sample, in 1:1 pixel units. So the mapping from the
+hardware's map coordinates to a world frame is exactly a 2D translation, and
+its value can be read from two documented addresses.
+
+Method, to redo on another game: log the Mode 7 offsets per frame and dump WRAM
+every few frames; unwrap the offsets by detecting the 1024 jumps; then for every
+16-bit WRAM address, check whether `value - unwrapped` is constant.
+
+Caveats: one save state, one track, ~700 frames, and only the stretch of
+driving that fits in it. Re-check across a full lap and on other tracks,
+especially where the course crosses the map wrap. Addresses are per ROM
+revision, and some of the above are probably mirrors of each other.
+
 **How much extra map would be needed.** Per scanline, the span of map
 coordinates the visible floor reaches, in multiples of the hardware map
 (F-Zero, save state 4, 21:9 / 96px extensions):
@@ -145,31 +173,33 @@ wrapped, and `MARK` shows exactly which pixels came from it.
    rightly calls not the HD look. Teaching the shader a larger texture is the
    next piece of rendering work and is not hard; the texture upload and the
    sampler wrap are the only parts that change.
-2. **Where the tiles come from.** Settled in shape, not yet built: a per-game
-   **supplement file** carrying the course map plus a small descriptor saying
-   where to read the world origin from — say "16-bit little-endian at $7E:1234
-   and $7E:1236, scale N". That descriptor is the entire per-game knowledge, and
-   it is data. No ROM hack in the common case, and nothing game-specific in
-   emulator code.
+2. **Where the tiles come from.** Settled in shape, not yet built. **The
+   supplement carries no game assets.** Anything already in the ROM is read from
+   the ROM at run time; the supplement holds only new data and descriptors, so
+   it never contains copyrighted content.
 
-   A ROM hack stays the fallback for a game with no usable position value in
-   RAM: one write per frame publishing the origin, no decompression changes, no
-   extra streaming.
+   That rules out shipping the course map in the file, and the world-position
+   measurement above makes it unnecessary. The emulator can **cache tilemap
+   writes as they stream past, keyed by world coordinate** rather than by map
+   coordinate — the world coordinate being read from the address the supplement
+   names. Every tile then comes from the ROM at run time, through the game's own
+   decoder, and the supplement is two addresses and a constant.
 
-   Size is not a constraint — a whole course as tile indices is a few hundred
-   KB — so there is no reason to reconstruct the world at runtime when it can be
-   a file. Generating that file (drive and capture, or decode from ROM offline)
-   is a tool, outside the emulator, and can be wrong without breaking anything.
+   This is generic mechanism: cache what is written, index it by a number read
+   from a named address. Nothing in emulator code knows which game it is. It is
+   also not the rejected "infer the world frame from the stream" idea — nothing
+   is inferred, the frame is supplied.
 
-   The unproven step, and the one that would sink this: whether the game's
-   course position in RAM relates to Mode 7 map coordinates by a plain 2D
-   translation. Rotation is already in the matrix so it should reduce to one,
-   but the game keeps the car near a fixed spot in map space and rewrites the
-   world around it, so it needs measuring before the format is fixed. Watch a
-   candidate RAM value against the Mode 7 origin while driving and check they
-   track linearly.
+   Known cost: a warm-up. Only world that has streamed past is cached, so the
+   first lap fills in progressively. Whether a lap's worth of window sweep
+   covers what the widescreen extension asks for is unmeasured. Whether a cache
+   may be persisted between runs is an open question — a local cache is not a
+   distributed asset, but that needs a decision rather than an assumption.
 
-   For the record, this item was framed wrongly twice. First it claimed a ROM
+   A ROM hack publishing the origin stays the fallback for a game with no usable
+   position value in RAM.
+
+   For the record, this item was framed wrongly twice before. First it claimed a ROM
    hack would have to decode 2–4x more course on a 3.58MHz CPU: the SNES CPU
    does not have to produce the tiles at all. Then it proposed the emulator
    derive the world frame from the stream, which is per-game logic in the wrong
@@ -190,8 +220,10 @@ wrapped, and `MARK` shows exactly which pixels came from it.
    c. **Decode from ROM on the host.** Full format reverse engineering. Most
       work, most control, still no ROM hack.
 
-   All three remain useful as ways to *generate* a supplement file offline.
-   None of them belongs inside the emulator.
+   With the world position available, (a) becomes the plan — but keyed by a
+   supplied coordinate rather than an inferred one. (b) and (c) stay useful for
+   filling the world ahead of the player without a warm-up lap, and neither puts
+   assets in the supplement, since both read the ROM at run time.
 3. **Configuration.** Replace the env hooks with an HD PPU option, default off,
    engaging only when extended data is available, so every other game stays
    bit-identical.
@@ -206,6 +238,9 @@ wrapped, and `MARK` shows exactly which pixels came from it.
   wider aspect ratios should be sampled before fixing on 2x versus 4x.
 - Nothing has been tried on a game other than F-Zero. Mario Kart's Mode 7 floor
   has not been looked at from this angle at all.
-- Every route in (2) needs the same thing in the end: the mapping from streamed
-  block to world position. That, not the decoding and not the storage, is the
-  problem to solve.
+- The `.m7x` file the debug loader reads contains tile indices lifted from the
+  ROM. It is a development artifact and must not be distributed; the shipping
+  path reads tiles from the ROM at run time.
+- Does a lap's worth of streamed world cover what the widescreen extension asks
+  for, or are there places the game never loads? Unmeasured, and it decides
+  whether the cache alone is enough.
