@@ -385,23 +385,41 @@ inline auto recorder() -> Recorder& {
 // record is the machine exactly as the routine found it, so a port can be fed
 // its true inputs, and the record that follows holds what the routine produced.
 //
-//   BSNES_TRACE_RAM_AT=03939e   with BSNES_TRACE_RAM as usual
+// Give two program counters and the records alternate: the routine's entry,
+// then wherever it has finished. That is usually necessary rather than a
+// refinement, because a routine's outputs are often scratch that later code in
+// the same frame reuses -- comparing them at the next entry compares whatever
+// overwrote them. The instruction after the call site works as an exit.
+//
+//   BSNES_TRACE_RAM_AT=03939e            entry only
+//   BSNES_TRACE_RAM_AT=039268,0392aa     entry and exit, alternating
 struct EntryTrigger {
   auto enabled() -> bool {
     if(state < 0) {
       state = 0;
       if(auto spec = getenv("BSNES_TRACE_RAM_AT")) {
-        pc = (unsigned)strtoul(spec, nullptr, 16);
-        state = 1;
+        for(auto p = spec; *p && count < Max;) {
+          char* end = nullptr;
+          pcs[count] = (unsigned)strtoul(p, &end, 16);
+          if(end == p) break;
+          count++;
+          p = *end == ',' ? end + 1 : end;
+        }
+        if(count) state = 1;
       }
     }
     return state == 1;
   }
 
-  auto matches(unsigned address) const -> bool { return address == pc; }
+  auto matches(unsigned address) const -> bool {
+    for(unsigned n = 0; n < count; n++) if(pcs[n] == address) return true;
+    return false;
+  }
 
 private:
-  unsigned pc = 0;
+  static constexpr unsigned Max = 8;
+  unsigned pcs[Max] = {};
+  unsigned count = 0;
   int state = -1;
 };
 
