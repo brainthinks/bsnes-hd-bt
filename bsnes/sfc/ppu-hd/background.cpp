@@ -89,6 +89,57 @@ auto PPU::Line::cacheMode7ExtendedMap() -> void {
     HdToolkit::Mode7ExtendedMap::dumpFromVram(path, ppu.vram, factor ? factor : 2);
   }
   if(auto path = HdTrace::extendedMapPath()) ppu.mode7ExtMap.load(path);
+  if(auto text = HdTrace::worldOriginDescriptor()) {
+    if(ppu.mode7WorldOrigin.parse(text)) ppu.mode7World.reserve(HdTrace::worldCacheLog2());
+  }
+}
+
+//The world frame is supplied, never inferred. A descriptor names the memory a
+//game keeps the player's position in; the offset between the hardware's map
+//coordinates and that world position is whatever is left once the Mode 7
+//register's own wrap is taken off, and it is always a whole number of maps.
+auto PPU::cacheMode7WorldOrigin() -> void {
+  if(!mode7WorldOrigin.valid) return;
+  if(getenv("BSNES_M7_WORLD_STATS")) {
+    static unsigned last = 0;
+    unsigned f = HdTrace::frame();
+    if(f >= last + 100) {
+      last = f;
+      fprintf(stderr, "[world] f=%u cached=%u origin=%d,%d hits=%llu misses=%llu\n",
+        f, mode7World.count(), mode7WorldOriginX, mode7WorldOriginY,
+        (unsigned long long)mode7WorldHits, (unsigned long long)mode7WorldMisses);
+    }
+  }
+  auto read16 = [&](unsigned address) -> unsigned {
+    unsigned offset = ((address >> 16) & 1) << 16 | (address & 0xffff);
+    return cpu.wram[offset & 0x1ffff] | cpu.wram[(offset + 1) & 0x1ffff] << 8;
+  };
+  auto clip = [](int n) -> int { return n & 0x2000 ? (n | ~1023) : (n & 1023); };
+  int hoffset = clip((int13)lines[0].io.mode7.hoffset);
+  int voffset = clip((int13)lines[0].io.mode7.voffset);
+  mode7WorldOriginX = mode7WorldOrigin.worldX(read16) - hoffset;
+  mode7WorldOriginY = mode7WorldOrigin.worldY(read16) - voffset;
+}
+
+auto PPU::recordMode7WorldTile(uint address, uint8 tile) -> void {
+  if(!mode7World.ready() || !mode7WorldOrigin.valid) return;
+  //the map is a ring buffer: a slot holds the copy of its world column nearest
+  //the player, so round the origin to whole maps before placing the write
+  int mapTileX = (int)(address % 128), mapTileY = (int)(address / 128);
+  int worldTileX = mapTileX + nearestMapMultiple(mode7WorldOriginX, mapTileX);
+  int worldTileY = mapTileY + nearestMapMultiple(mode7WorldOriginY, mapTileY);
+  mode7World.record(worldTileX, worldTileY, tile);
+}
+
+auto PPU::mode7WorldLookup(int pixelX, int pixelY, unsigned& tile) const -> bool {
+  if(!mode7World.ready() || !mode7WorldOrigin.valid) return false;
+  //only where the sample has left the hardware's window, as everywhere else
+  if(!((pixelX | pixelY) & ~1023)) return false;
+  int worldTileX = (pixelX + mode7WorldOriginX) >> 3;
+  int worldTileY = (pixelY + mode7WorldOriginY) >> 3;
+  bool hit = mode7World.lookup(worldTileX, worldTileY, tile);
+  hit ? mode7WorldHits++ : mode7WorldMisses++;
+  return hit;
 }
 
 auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> void {

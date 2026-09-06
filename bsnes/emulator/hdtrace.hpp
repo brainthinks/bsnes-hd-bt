@@ -101,6 +101,15 @@ namespace HdTrace {
     return on == 1;
   }
 
+  //BSNES_M7_WORLD="7e00a8-2688,7e00aa-3504": where a game keeps the player's
+  //world position, so streamed Mode 7 tiles can be remembered against it.
+  inline auto worldOriginDescriptor() -> const char* { return getenv("BSNES_M7_WORLD"); }
+  inline auto worldCacheLog2() -> unsigned {
+    auto text = getenv("BSNES_M7_WORLD_BITS");
+    unsigned bits = text ? (unsigned)atoi(text) : 20;
+    return bits ? bits : 20;
+  }
+
   inline auto timing() -> bool {
     static int on = -1;
     if(on < 0) on = getenv("BSNES_TIME_FRAME") ? 1 : 0;

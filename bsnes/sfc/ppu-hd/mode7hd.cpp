@@ -149,7 +149,7 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
 
   //the GPU sampler still reads the hardware's 128x128 map, so an extended map
   //keeps the CPU picture until the shader learns the larger one
-  if(ppu.gpuSupersample() && this->y < 240 && !extbg && !ppu.mode7ExtMap.loaded()) {
+  if(ppu.gpuSupersample() && this->y < 240 && !extbg && !ppu.mode7ExtMap.loaded() && !ppu.mode7World.ready()) {
     ppu.gpuMode7.active = true;
     ppu.gpuMode7.ss = ppu.gpuSsFactor();
     float* p = ppu.gpuMode7.lines + this->y * 24;
@@ -211,7 +211,8 @@ auto PPU::Line::renderMode7HD(PPU::IO::Background& self, uint8 source) -> void {
         bool skip = false;
         if(pixelX != pixelXp || pixelY != pixelYp) {
           unsigned extended = 0;
-          bool fromExtended = ppu.mode7ExtMap.lookup(pixelX, pixelY, extended);
+          bool fromExtended = ppu.mode7ExtMap.lookup(pixelX, pixelY, extended)
+                           || ppu.mode7WorldLookup(pixelX, pixelY, extended);
           bool outside = ((pixelX | pixelY) & ~1023) != 0;
           uint tile    = fromExtended ? extended
                        : io.mode7.repeat == 3 && outside ? 0 : (ppu.vram[(pixelY >> 3 & 127) * 128 + (pixelX >> 3 & 127)] & 0xff);

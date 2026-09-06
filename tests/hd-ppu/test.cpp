@@ -10,6 +10,7 @@
 #include "gpu-mode7.hpp"
 #include "emulator/hdtoolkit.hpp"
 #include "emulator/m7extmap.hpp"
+#include "emulator/m7worldcache.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -519,6 +520,81 @@ static auto testMode7ExtendedMap() -> void {
   }
 }
 
+static auto testMode7WorldCache() -> void {
+  HdToolkit::Mode7WorldCache cache;
+  unsigned tile = 0;
+  // Nothing is remembered until room is reserved, and a lookup that misses says
+  // so, which is what makes the caller fall back to the hardware.
+  CHECK(!cache.ready());
+  CHECK(!cache.lookup(0, 0, tile));
+
+  cache.reserve(12);
+  CHECK(cache.ready());
+  CHECK(cache.capacity() == 4096);
+  CHECK(cache.count() == 0);
+  CHECK(!cache.lookup(5, 7, tile));
+
+  cache.record(5, 7, 42);
+  CHECK(cache.count() == 1);
+  CHECK(cache.lookup(5, 7, tile));
+  CHECK(tile == 42);
+  // Negative world coordinates are ordinary: the player can drive either way.
+  cache.record(-1000, -2000, 9);
+  CHECK(cache.lookup(-1000, -2000, tile));
+  CHECK(tile == 9);
+  CHECK(!cache.lookup(-1000, -2001, tile));
+  // Rewriting a place replaces it rather than growing.
+  cache.record(5, 7, 43);
+  CHECK(cache.count() == 2);
+  CHECK(cache.lookup(5, 7, tile));
+  CHECK(tile == 43);
+
+  // Many distinct places: a table that fills evicts rather than misbehaving,
+  // and what survives is still correct.
+  for(int n = 0; n < 20000; n++) cache.record(n, n * 3, (unsigned)(n & 0xff));
+  unsigned found = 0, wrong = 0;
+  for(int n = 0; n < 20000; n++) {
+    if(!cache.lookup(n, n * 3, tile)) continue;
+    found++;
+    if(tile != (unsigned)(n & 0xff)) wrong++;
+  }
+  CHECK(found > 0);
+  CHECK(wrong == 0);
+  CHECK(cache.count() <= cache.capacity());
+
+  cache.clear();
+  CHECK(cache.count() == 0);
+  CHECK(!cache.lookup(5, 7, tile));
+
+  // The descriptor is data: two addresses and the constant each sits above the
+  // world coordinate. Nothing here knows which game it describes.
+  HdToolkit::Mode7WorldOrigin origin;
+  CHECK(!origin.valid);
+  CHECK(!origin.parse(nullptr));
+  CHECK(!origin.parse("nonsense"));
+  CHECK(origin.parse("7e00a8-2688,7e00aa-3504"));
+  CHECK(origin.valid);
+  CHECK(origin.addressX == 0x7e00a8);
+  CHECK(origin.addressY == 0x7e00aa);
+  CHECK(origin.deltaX == -2688);
+  CHECK(origin.deltaY == -3504);
+  auto read16 = [](unsigned address) -> unsigned {
+    return address == 0x7e00a8 ? 3645u : address == 0x7e00aa ? 3973u : 0u;
+  };
+  CHECK(origin.worldX(read16) == 3645 - 2688);
+  CHECK(origin.worldY(read16) == 3973 - 3504);
+  // A positive constant works the same way.
+  HdToolkit::Mode7WorldOrigin plus;
+  CHECK(plus.parse("7e0100+16,7e0102+32"));
+  CHECK(plus.deltaX == 16);
+  CHECK(plus.deltaY == 32);
+  // No constant at all is a plain read.
+  HdToolkit::Mode7WorldOrigin bare;
+  CHECK(bare.parse("7e0eb8,7e0eba"));
+  CHECK(bare.deltaX == 0);
+  CHECK(bare.deltaY == 0);
+}
+
 static auto testShaderSource(const std::string& path) -> void {
   auto file = readFile(path);
   CHECK(!file.empty());
@@ -962,6 +1038,7 @@ auto main(int argc, char** argv) -> int {
   testPacking();
   testColorRamps();
   testMode7ExtendedMap();
+  testMode7WorldCache();
   testShaderSource(shaderPath);
   testViewportSource();
 #ifdef HD_PPU_GL

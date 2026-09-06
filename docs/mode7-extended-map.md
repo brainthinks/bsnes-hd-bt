@@ -165,6 +165,51 @@ Verified: a starter file changes nothing across four sampled frames of a drive;
 an authored surround replaces the phantom track where the hardware would have
 wrapped, and `MARK` shows exactly which pixels came from it.
 
+## The world cache, and what it measured
+
+Built: tilemap writes are remembered against the world coordinate they were
+written for, and the Mode 7 samplers consult that cache wherever a sample has
+left the hardware's window — the same precedence rule the extended map uses, so
+an empty cache renders exactly as today.
+
+- `bsnes/emulator/m7worldcache.hpp` — `Mode7WorldCache` (open addressing,
+  power-of-two capacity, evicts rather than growing, because a miss only costs a
+  fallback) and `Mode7WorldOrigin` (the descriptor: two addresses and the
+  constant each value sits above the world coordinate).
+- Writes are captured in `writeVRAM<0>`, which is where Mode 7 tilemap entries
+  land. The world coordinate for a slot is chosen by rounding the origin to
+  whole maps, because the map is a ring buffer and a slot holds the copy of its
+  column nearest the player.
+- The origin is recomputed each flush as `worldPosition - Mode 7 register`,
+  which is always a whole number of maps and self-corrects.
+- `BSNES_M7_WORLD="7e00a8-2688,7e00aa-3504"` supplies the descriptor,
+  `BSNES_M7_WORLD_BITS` the capacity, `BSNES_M7_WORLD_STATS=1` prints fill and
+  hit counts.
+
+Verified: with no descriptor the build is byte-identical to the previous commit
+across 30 frames of a drive; `tests/hd-ppu` is at 237 passing.
+
+**It works, and on a first pass it barely helps.** Over 700 frames of driving:
+
+| frame | tiles cached | hits | misses |
+|---|---|---|---|
+| 100 | 2802 | 0 | 1.40M |
+| 300 | 11406 | 0 | 2.48M |
+| 500 | 20954 | 0 | 3.84M |
+| 700 | 25858 | 81934 | 4.97M |
+
+The cache fills steadily and the origin tracks the car correctly, but the hit
+rate is about 1.6% and stays at zero until the player has been somewhere twice.
+The reason is structural, not a bug: **a forward-facing camera needs world
+ahead of the player, and the game only streams a place as it approaches.** The
+cache holds what is behind. It should pay off on a second lap, and for looking
+sideways at ground already driven, and it cannot help a first pass.
+
+That promotes the speculative decoder from "nice to have" to the piece that
+makes this useful: snapshot the machine, run the game's own decode routine at a
+course position ahead of the player, harvest the buffer, restore. The cache is
+the right place to put what it returns, and it is already keyed correctly.
+
 ## What is left
 
 1. **GPU sampler.** The GPU Mode 7 shader still reads the hardware's 128x128
@@ -190,11 +235,11 @@ wrapped, and `MARK` shows exactly which pixels came from it.
    also not the rejected "infer the world frame from the stream" idea — nothing
    is inferred, the frame is supplied.
 
-   Known cost: a warm-up. Only world that has streamed past is cached, so the
-   first lap fills in progressively. Whether a lap's worth of window sweep
-   covers what the widescreen extension asks for is unmeasured. Whether a cache
-   may be persisted between runs is an open question — a local cache is not a
-   distributed asset, but that needs a decision rather than an assumption.
+   Built and measured; see the section above. The warm-up turned out to be
+   structural rather than a matter of patience, which makes the speculative
+   decoder necessary rather than optional. Whether a cache may persist between
+   runs is still open — a local cache is not a distributed asset, but that needs
+   a decision rather than an assumption.
 
    A ROM hack publishing the origin stays the fallback for a game with no usable
    position value in RAM.
@@ -241,6 +286,8 @@ wrapped, and `MARK` shows exactly which pixels came from it.
 - The `.m7x` file the debug loader reads contains tile indices lifted from the
   ROM. It is a development artifact and must not be distributed; the shipping
   path reads tiles from the ROM at run time.
-- Does a lap's worth of streamed world cover what the widescreen extension asks
-  for, or are there places the game never loads? Unmeasured, and it decides
-  whether the cache alone is enough.
+- Measured: a first pass does not cover what the extension asks for, because the
+  camera looks at world the game has not streamed yet. Whether a *second* lap
+  covers it is still unmeasured, and worth knowing before building the
+  speculative decoder — if repeat visits fill it in, the decoder only has to
+  cover the first lap.
