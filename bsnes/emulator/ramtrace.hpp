@@ -144,6 +144,62 @@ private:
   bool started = false;
 };
 
+// Which code writes a range of memory.
+//
+// Porting a subsystem starts with finding it, and the emulator already knows:
+// whatever stores into the buffer is the routine. Cheaper and far more certain
+// than reading a disassembly hoping to recognise it.
+struct WriteWatch {
+  auto enabled() -> bool {
+    if(state < 0) {
+      state = 0;
+      if(auto spec = getenv("BSNES_WATCH_WRITE")) {
+        char* end = nullptr;
+        low = (unsigned)strtoul(spec, &end, 16);
+        if(end && *end == '-') high = (unsigned)strtoul(end + 1, nullptr, 16);
+        if(high >= low) { state = 1; atexit(reportAtExit); }
+      }
+    }
+    return state == 1;
+  }
+
+  auto note(unsigned address, unsigned pc) -> void {
+    if(address < low || address > high) return;
+    for(unsigned n = 0; n < seen; n++) {
+      if(sites[n].pc == pc) { sites[n].count++; return; }
+    }
+    if(seen < Max) sites[seen++] = {pc, 1};
+  }
+
+  auto report() -> void {
+    if(state != 1 || !seen) return;
+    fprintf(stderr, "[watch] writes to %06x-%06x came from %u places:\n", low, high, seen);
+    for(unsigned n = 0; n < seen; n++) {
+      fprintf(stderr, "  %02x:%04x  %u writes\n",
+        sites[n].pc >> 16 & 0xff, sites[n].pc & 0xffff, sites[n].count);
+    }
+  }
+
+private:
+  static constexpr unsigned Max = 64;
+  struct Site { unsigned pc, count; };
+  static auto reportAtExit() -> void;
+
+  Site sites[Max] = {};
+  unsigned seen = 0, low = 0, high = 0;
+  int state = -1;
+};
+
+inline auto watch() -> WriteWatch& {
+  static WriteWatch instance;
+  return instance;
+}
+
+inline auto WriteWatch::reportAtExit() -> void { watch().report(); }
+
+inline auto watching() -> bool { return watch().enabled(); }
+inline auto watchWrite(unsigned address, unsigned pc) -> void { watch().note(address, pc); }
+
 inline auto recorder() -> Recorder& {
   static Recorder instance;
   return instance;
