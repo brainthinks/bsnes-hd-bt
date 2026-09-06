@@ -93,8 +93,17 @@ sub-tile offset (`pixelX & 7`) is unaffected and the palette fetch is unchanged.
 **A file loader first, whatever supplies the data later.** The rendering half is
 independent of where the tiles come from, so it was worth proving on its own. It
 was originally assumed the supply had to be a ROM hack writing through a side
-channel; that assumption is wrong (see below) and the loader deliberately does
-not encode it.
+channel; that assumption is wrong and the loader deliberately does not encode
+it.
+
+**Generic mechanism in the emulator, per-game knowledge as data.** Every route
+needs someone to know how a particular game lays out its course. What matters is
+where that knowledge lives. It must not live in `mode7hd.cpp`. This rules out
+having the emulator watch the stream and infer the world frame: inferring
+per-game behaviour is per-game logic in disguise, and the fragile kind. The
+emulator gets one generic capability — render Mode 7 through an extended map,
+positioned by a world origin it reads from a memory address — and knows nothing
+about which game or what the value means. Everything else is a supplement file.
 
 ## What exists now
 
@@ -136,14 +145,40 @@ wrapped, and `MARK` shows exactly which pixels came from it.
    rightly calls not the HD look. Teaching the shader a larger texture is the
    next piece of rendering work and is not hard; the texture upload and the
    sampler wrap are the only parts that change.
-2. **Where the tiles come from.** The SNES CPU does not have to produce them —
-   an earlier note here claimed the hack would have to decode 2–4x more course
-   on a 3.58MHz CPU, and that was wrong. Three tiers, cheapest first:
+2. **Where the tiles come from.** Settled in shape, not yet built: a per-game
+   **supplement file** carrying the course map plus a small descriptor saying
+   where to read the world origin from — say "16-bit little-endian at $7E:1234
+   and $7E:1236, scale N". That descriptor is the entire per-game knowledge, and
+   it is data. No ROM hack in the common case, and nothing game-specific in
+   emulator code.
+
+   A ROM hack stays the fallback for a game with no usable position value in
+   RAM: one write per frame publishing the origin, no decompression changes, no
+   extra streaming.
+
+   Size is not a constraint — a whole course as tile indices is a few hundred
+   KB — so there is no reason to reconstruct the world at runtime when it can be
+   a file. Generating that file (drive and capture, or decode from ROM offline)
+   is a tool, outside the emulator, and can be wrong without breaking anything.
+
+   The unproven step, and the one that would sink this: whether the game's
+   course position in RAM relates to Mode 7 map coordinates by a plain 2D
+   translation. Rotation is already in the matrix so it should reduce to one,
+   but the game keeps the car near a fixed spot in map space and rewrites the
+   world around it, so it needs measuring before the format is fixed. Watch a
+   candidate RAM value against the Mode 7 origin while driving and check they
+   track linearly.
+
+   For the record, this item was framed wrongly twice. First it claimed a ROM
+   hack would have to decode 2–4x more course on a 3.58MHz CPU: the SNES CPU
+   does not have to produce the tiles at all. Then it proposed the emulator
+   derive the world frame from the stream, which is per-game logic in the wrong
+   place. The three ways to obtain the data, cheapest first, are still worth
+   listing — as ways to build the supplement, not as runtime behaviour:
 
    a. **Watch what the game already produces.** The emulator sees every
-      streamed block and where it lands. Nothing extra runs. The open problem
-      is placing blocks in a global frame, which is the stitching question
-      above — currently the most promising route and the one to try first.
+      streamed block and where it lands. Rejected as a plan: placing blocks in
+      a global frame means inferring per-game behaviour inside the emulator.
 
    b. **Run the game's own decoder speculatively.** bsnes already serializes
       complete machine state, so a snapshot can be taken, the decode routine
@@ -155,9 +190,8 @@ wrapped, and `MARK` shows exactly which pixels came from it.
    c. **Decode from ROM on the host.** Full format reverse engineering. Most
       work, most control, still no ROM hack.
 
-   A ROM hack writing through an emulator-recognised port remains an option and
-   is the only one that needs no reverse engineering, but it is now the last
-   resort rather than the plan.
+   All three remain useful as ways to *generate* a supplement file offline.
+   None of them belongs inside the emulator.
 3. **Configuration.** Replace the env hooks with an HD PPU option, default off,
    engaging only when extended data is available, so every other game stays
    bit-identical.
