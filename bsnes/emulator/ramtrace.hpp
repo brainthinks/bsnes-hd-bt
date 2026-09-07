@@ -20,11 +20,18 @@
 //   uint16 version      1
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
+//   Registers initial   the machine when the first record was taken
 //   uint8  initial[ram_len]
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
+//     Registers regs    the machine when this record was taken
 //     uint32 delta_count
 //     per delta: uint32 offset, uint8 value
+//
+// Registers is a,x,y,s,d as uint16 then db,p as uint8: twelve bytes. They are
+// needed because routines take their arguments in registers as often as in
+// memory -- the car routines are indexed by X, and a snapshot without it cannot
+// say which car the call was for.
 
 #include <cstdio>
 #include <cstdint>
@@ -33,21 +40,27 @@
 
 namespace RamTrace {
 
+// The machine's registers at the moment a record was taken.
+struct Snapshot {
+  uint16_t a = 0, x = 0, y = 0, s = 0, d = 0;
+  uint8_t db = 0, p = 0;
+};
+
 struct Recorder {
   auto active() const -> bool { return file != nullptr; }
 
   // Called once per frame with work RAM as it stands at the end of it. The
   // first call establishes the starting state and emits no frame record.
-  auto observe(const uint8_t* ram, unsigned length) -> void {
+  auto observe(const uint8_t* ram, unsigned length, const Snapshot& regs = {}) -> void {
     if(!enabled(length)) return;
     if(!started) {
       started = true;
-      if(!open(length, ram)) return;
+      if(!open(length, ram, regs)) return;
       return;
     }
     if(!file) return;
     if(skip) { skip--; return; }
-    writeFrame(ram);
+    writeFrame(ram, regs);
   }
 
   // One button, as the SNES gamepad enum orders them. Accumulated until the
@@ -78,7 +91,17 @@ private:
     return length && (file || !started);
   }
 
-  auto open(unsigned length, const uint8_t* ram) -> bool {
+  static auto writeRegisters(uint8_t* p, const Snapshot& regs) -> void {
+    write16(p, regs.a);
+    write16(p + 2, regs.x);
+    write16(p + 4, regs.y);
+    write16(p + 6, regs.s);
+    write16(p + 8, regs.d);
+    p[10] = regs.db;
+    p[11] = regs.p;
+  }
+
+  auto open(unsigned length, const uint8_t* ram, const Snapshot& regs) -> bool {
     auto path = getenv("BSNES_TRACE_RAM");
     if(!path) return false;
     if(auto after = getenv("BSNES_TRACE_RAM_AFTER")) skip = (unsigned)atoi(after);
@@ -89,24 +112,26 @@ private:
     shadow = new uint8_t[len];
     memcpy(shadow, ram, len);
 
-    uint8_t header[14] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 1);
+    uint8_t header[26] = {'F', 'Z', 'T', 'R'};
+    write16(header + 4, 2);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
+    writeRegisters(header + 14, regs);
     fwrite(header, 1, sizeof(header), file);
     fwrite(ram, 1, len, file);
     atexit(closeAtExit);
     return true;
   }
 
-  auto writeFrame(const uint8_t* ram) -> void {
+  auto writeFrame(const uint8_t* ram, const Snapshot& regs) -> void {
     // count first, so the record can be written in one pass
     uint32_t changed = 0;
     for(unsigned n = 0; n < len; n++) changed += ram[n] != shadow[n];
 
-    uint8_t head[6];
+    uint8_t head[18];
     write16(head, (uint16_t)input);
-    write32(head + 2, changed);
+    writeRegisters(head + 2, regs);
+    write32(head + 14, changed);
     fwrite(head, 1, sizeof(head), file);
 
     for(unsigned n = 0; n < len; n++) {
@@ -296,8 +321,15 @@ struct Coverage {
     if(state != 1 || !map) return;
     auto file = fopen(target, "wb");
     if(!file) return;
-    unsigned count = 0;
-    for(unsigned n = 0; n < Space; n++) count += map[n] != 0;
+    //every address with anything recorded about it goes in the file, but only
+    //some of them are code: the rest were read as data. Reporting the total as
+    //"executed" overstates it by an order of magnitude, which is misleading
+    //when the number is being used to judge how much of the game has been seen.
+    unsigned count = 0, ran = 0;
+    for(unsigned n = 0; n < Space; n++) {
+      count += map[n] != 0;
+      ran += (map[n] & Executed) != 0;
+    }
 
     uint8_t header[10] = {'F', 'Z', 'C', 'V'};
     header[4] = 1; header[5] = 0;
@@ -311,7 +343,8 @@ struct Coverage {
       fwrite(record, 1, sizeof(record), file);
     }
     fclose(file);
-    fprintf(stderr, "[coverage] %u executed addresses written to %s\n", count, target);
+    fprintf(stderr, "[coverage] %u instructions executed, %u addresses touched, written to %s\n",
+      ran, count, target);
   }
 
 private:

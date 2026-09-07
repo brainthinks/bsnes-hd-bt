@@ -41,7 +41,12 @@ auto CPU::main() -> void {
   //BSNES_TRACE_RAM_AT: snapshot RAM as a routine finds it, which is the only
   //way to capture inputs that later code in the same frame overwrites
   if(RamTrace::snapshotting() && RamTrace::atEntry(r.pc.d)) {
-    RamTrace::recorder().observe(wram, sizeof(wram));
+    //registers as well as RAM: a routine's arguments are as often in X as in
+    //memory, and the car routines are indexed by it
+    RamTrace::Snapshot regs;
+    regs.a = r.a.w; regs.x = r.x.w; regs.y = r.y.w;
+    regs.s = r.s.w; regs.d = r.d.w; regs.db = r.b; regs.p = r.p;
+    RamTrace::recorder().observe(wram, sizeof(wram), regs);
   }
   if(!status.interruptPending) return instruction();
 
