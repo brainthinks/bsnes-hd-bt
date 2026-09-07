@@ -107,6 +107,14 @@ auto CPU::Channel::transfer(uint24 addressA, uint2 index) -> void {
 auto CPU::Channel::dmaRun() -> void {
   if(!dmaEnable) return;
 
+  //BSNES_TRACE_DMA: which cartridge range went to which port, before the
+  //source address is walked forward by the transfer below
+  if(RamTrace::tracingDma()) {
+    RamTrace::noteDma(sourceBank << 16 | sourceAddress, transferSize,
+                      0x2100 | targetAddress, direction, transferMode, fixedTransfer,
+                      ppu.vramAddressForTrace(), cpu.r.pc.d);
+  }
+
   step<8,0>();
   edge();
 

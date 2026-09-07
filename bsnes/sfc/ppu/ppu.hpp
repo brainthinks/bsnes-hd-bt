@@ -1,4 +1,8 @@
 struct PPU : Thread, PPUcounter {
+  //Where a VRAM transfer would land, for the DMA log. The address itself stays
+  //private; this only reads it.
+  auto vramAddressForTrace() const -> uint16 { return io.vramAddress; }
+
   alwaysinline auto interlace() const -> bool { return display.interlace; }
   alwaysinline auto overscan() const -> bool { return display.overscan; }
   alwaysinline auto vdisp() const -> uint { return display.vdisp; }

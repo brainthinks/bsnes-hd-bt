@@ -399,6 +399,65 @@ inline auto watchInput(unsigned address, unsigned pc) -> void { inputWatch().not
 
 inline auto WriteWatch::reportReadsAtExit() -> void { readWatch().report(); inputWatch().report(); }
 
+// Where each DMA block comes from and where it lands.
+//
+// A ROM byte that is read but never executed could be graphics, a palette, a
+// map, music or a lookup table, and reads alone cannot tell them apart. A DMA
+// says: this range went to that port. $2118 is VRAM, $2122 is CGRAM, $2104 is
+// OAM, $2140-$2143 is the audio CPU. That is evidence about what the bytes are,
+// not merely that something touched them.
+//
+//   BSNES_TRACE_DMA=/path/to/log
+//
+// One line per transfer, aggregated afterwards. Work RAM sources are recorded
+// too: graphics expanded into $7F0000 and sent on from there would otherwise
+// leave no trace of where they ended up.
+struct DmaTrace {
+  auto enabled() -> bool {
+    if(state < 0) {
+      state = 0;
+      if(auto path = getenv("BSNES_TRACE_DMA")) {
+        file = fopen(path, "w");
+        if(file) { state = 1; atexit(closeAtExit); }
+      }
+    }
+    return state == 1;
+  }
+
+  //`target` is where a transfer lands beyond the port itself: for a VRAM write
+  //that is the word address in $2116, which is the only way to know which part
+  //of the tilemap a strip belongs to.
+  auto note(unsigned source, unsigned length, unsigned port, unsigned direction,
+            unsigned mode, bool fixed, unsigned target = 0, unsigned pc = 0) -> void {
+    if(!file) return;
+    //log every transfer, cartridge or not: a block staged in work RAM and sent
+    //on from there is how expanded graphics reach VRAM, and dropping those
+    //hides the second half of the chain
+    fprintf(file, "%06x %u %04x %u %u %u %04x %06x\n",
+            source & 0xffffff, length ? length : 0x10000, port, direction, mode, fixed,
+            target & 0xffff, pc & 0xffffff);
+  }
+
+  auto close() -> void { if(file) { fclose(file); file = nullptr; } }
+
+private:
+  static auto closeAtExit() -> void;
+  FILE* file = nullptr;
+  int state = -1;
+};
+
+inline auto dmaTrace() -> DmaTrace& {
+  static DmaTrace instance;
+  return instance;
+}
+inline auto DmaTrace::closeAtExit() -> void { dmaTrace().close(); }
+inline auto tracingDma() -> bool { return dmaTrace().enabled(); }
+inline auto noteDma(unsigned source, unsigned length, unsigned port,
+                    unsigned direction, unsigned mode, bool fixed,
+                    unsigned target = 0, unsigned pc = 0) -> void {
+  dmaTrace().note(source, length, port, direction, mode, fixed, target, pc);
+}
+
 inline auto recorder() -> Recorder& {
   static Recorder instance;
   return instance;
@@ -426,6 +485,9 @@ inline auto recorder() -> Recorder& {
 //
 //   BSNES_TRACE_RAM_AT=03939e            entry only
 //   BSNES_TRACE_RAM_AT=039268,0392aa     entry and exit, alternating
+// Optional paired mode records pcs[0] followed by pcs[1], ignoring unrelated
+// visits to the exit. Nested/re-entered brackets fail rather than mispairing.
+// Use unique boundaries for a non-recursive routine; this is not a call tracer.
 struct EntryTrigger {
   auto enabled() -> bool {
     if(state < 0) {
@@ -439,18 +501,36 @@ struct EntryTrigger {
           p = *end == ',' ? end + 1 : end;
         }
         if(count) state = 1;
+        if(auto value = getenv("BSNES_TRACE_RAM_PAIRED")) paired = strcmp(value, "1") == 0;
+        if(paired && (count != 2 || pcs[0] == pcs[1])) {
+          fprintf(stderr, "[ramtrace] paired mode requires two distinct PCs\n");
+          exit(1);
+        }
       }
     }
     return state == 1;
   }
 
-  auto matches(unsigned address) const -> bool {
+  auto matches(unsigned address) -> bool {
+    if(paired) {
+      if(address == pcs[0]) {
+        if(inside) {
+          fprintf(stderr, "[ramtrace] repeated entry before paired exit\n");
+          exit(1);
+        }
+        inside = true;
+        return true;
+      }
+      if(address == pcs[1] && inside) { inside = false; return true; }
+      return false;
+    }
     for(unsigned n = 0; n < count; n++) if(pcs[n] == address) return true;
     return false;
   }
 
 private:
   static constexpr unsigned Max = 8;
+  bool paired = false, inside = false;
   unsigned pcs[Max] = {};
   unsigned count = 0;
   int state = -1;

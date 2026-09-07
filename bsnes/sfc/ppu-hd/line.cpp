@@ -233,6 +233,29 @@ auto PPU::Line::flush() -> void {
         }
         //BSNES_DUMP_VRAM_BIN=<prefix>: raw VRAM + CGRAM at the same frames, so
         //the tilemap can be decoded and rendered offline.
+        //BSNES_DUMP_M7=<prefix>: the whole per-scanline Mode 7 state at the
+        //same frames. Without it a port has the matrix the game computed but
+        //no way to check what the hardware actually did with it line by line.
+        if(HdTrace::wantDumpVram(f)) {
+          if(auto prefix = getenv("BSNES_DUMP_M7")) {
+            char path[512];
+            snprintf(path, sizeof(path), "%s-%06u.txt", prefix, f);
+            if(auto mp = fopen(path, "w")) {
+              fprintf(mp, "#line mode a b c d x y hoffset voffset repeat hflip vflip\n");
+              for(uint yy = 0; yy < 240; yy++) {
+                auto& L = ppu.lines[yy];
+                fprintf(mp, "%u %u %d %d %d %d %d %d %u %u %u %d %d\n", yy,
+                  (unsigned)L.io.bgMode,
+                  (int)(int16)L.io.mode7.a, (int)(int16)L.io.mode7.b,
+                  (int)(int16)L.io.mode7.c, (int)(int16)L.io.mode7.d,
+                  (int)(int16)(L.io.mode7.x << 3) >> 3, (int)(int16)(L.io.mode7.y << 3) >> 3,
+                  (unsigned)L.io.mode7.hoffset, (unsigned)L.io.mode7.voffset,
+                  (unsigned)L.io.mode7.repeat, (int)L.io.mode7.hflip, (int)L.io.mode7.vflip);
+              }
+              fclose(mp);
+            }
+          }
+        }
         if(HdTrace::wantDumpVram(f)) {
           if(auto prefix = getenv("BSNES_DUMP_VRAM_BIN")) {
             char path[512];
