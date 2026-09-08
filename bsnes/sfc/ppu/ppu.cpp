@@ -192,6 +192,12 @@ auto PPU::power(bool reset) -> void {
   updateVideoMode();
 }
 
+auto PPU::vramForTrace() const -> const uint16* {
+  if(system.hdPPU()) return ppuhd.vramForTrace();
+  if(system.fastPPU()) return ppufast.vramForTrace();
+  return vram.data;
+}
+
 auto PPU::refresh() -> void {
   if(system.hdPPU()) {
     return ppuhd.refresh();

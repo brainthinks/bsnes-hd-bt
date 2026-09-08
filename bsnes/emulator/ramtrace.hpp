@@ -15,18 +15,31 @@
 // The file it writes is the RAM contents of a copyrighted game. It belongs to
 // whoever owns the ROM it came from and should never be distributed.
 //
+// BSNES_TRACE_VRAM=1 records video memory alongside work RAM, the same way and
+// at the same moments. It is off by default because most recordings do not need
+// it and it makes them bigger, but it is the only way to check the half of a
+// port that draws: a routine whose whole job is moving bytes into video memory
+// has nothing to be compared against without it.
+//
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      1
+//   uint16 version      3
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
+//   uint32 vram_len     0x10000, or 0 when video memory was not recorded
 //   uint8  initial[ram_len]
+//   uint8  initial_vram[vram_len]
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
 //     Registers regs    the machine when this record was taken
 //     uint32 delta_count
 //     per delta: uint32 offset, uint8 value
+//     uint32 vram_delta_count   (absent when vram_len is 0)
+//     per delta: uint32 offset, uint8 value
+//
+// Version 2 is the same without the two vram fields and the per-frame vram
+// section. Readers accept both.
 //
 // Registers is a,x,y,s,d as uint16 then db,p as uint8: twelve bytes. They are
 // needed because routines take their arguments in registers as often as in
@@ -51,16 +64,17 @@ struct Recorder {
 
   // Called once per frame with work RAM as it stands at the end of it. The
   // first call establishes the starting state and emits no frame record.
-  auto observe(const uint8_t* ram, unsigned length, const Snapshot& regs = {}) -> void {
+  auto observe(const uint8_t* ram, unsigned length, const Snapshot& regs = {},
+               const uint16_t* video = nullptr) -> void {
     if(!enabled(length)) return;
     if(!started) {
       started = true;
-      if(!open(length, ram, regs)) return;
+      if(!open(length, ram, regs, video)) return;
       return;
     }
     if(!file) return;
     if(skip) { skip--; return; }
-    writeFrame(ram, regs);
+    writeFrame(ram, regs, video);
   }
 
   // One button, as the SNES gamepad enum orders them. Accumulated until the
@@ -79,6 +93,8 @@ struct Recorder {
     file = nullptr;
     delete[] shadow;
     shadow = nullptr;
+    delete[] videoShadow;
+    videoShadow = nullptr;
   }
 
 private:
@@ -101,7 +117,8 @@ private:
     p[11] = regs.p;
   }
 
-  auto open(unsigned length, const uint8_t* ram, const Snapshot& regs) -> bool {
+  auto open(unsigned length, const uint8_t* ram, const Snapshot& regs,
+            const uint16_t* video) -> bool {
     auto path = getenv("BSNES_TRACE_RAM");
     if(!path) return false;
     if(auto after = getenv("BSNES_TRACE_RAM_AFTER")) skip = (unsigned)atoi(after);
@@ -112,18 +129,36 @@ private:
     shadow = new uint8_t[len];
     memcpy(shadow, ram, len);
 
-    uint8_t header[26] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 2);
+    //Video memory only when asked for, and only if the caller had any to give.
+    if(video && getenv("BSNES_TRACE_VRAM")) videoLen = VideoBytes;
+    if(videoLen) {
+      videoShadow = new uint8_t[videoLen];
+      flatten(videoShadow, video);
+    }
+
+    uint8_t header[30] = {'F', 'Z', 'T', 'R'};
+    write16(header + 4, 3);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
+    write32(header + 26, videoLen);
     fwrite(header, 1, sizeof(header), file);
     fwrite(ram, 1, len, file);
+    if(videoLen) fwrite(videoShadow, 1, videoLen, file);
     atexit(closeAtExit);
     return true;
   }
 
-  auto writeFrame(const uint8_t* ram, const Snapshot& regs) -> void {
+  //Video memory is words in the emulator and bytes in the file, low byte
+  //first, which is the order a transfer to $2118 and $2119 puts them in.
+  static auto flatten(uint8_t* out, const uint16_t* video) -> void {
+    for(unsigned n = 0; n < VideoBytes / 2; n++) {
+      out[n * 2] = video[n] & 0xff;
+      out[n * 2 + 1] = video[n] >> 8 & 0xff;
+    }
+  }
+
+  auto writeFrame(const uint8_t* ram, const Snapshot& regs, const uint16_t* video) -> void {
     // count first, so the record can be written in one pass
     uint32_t changed = 0;
     for(unsigned n = 0; n < len; n++) changed += ram[n] != shadow[n];
@@ -142,8 +177,33 @@ private:
       fwrite(delta, 1, sizeof(delta), file);
       shadow[n] = ram[n];
     }
+    if(videoLen) writeVideoDeltas(video);
     frames++;
     input = 0;
+  }
+
+  //The same delta pass over video memory. A frame of racing changes a few
+  //hundred bytes of it, the same order as work RAM; a track load changes most
+  //of it once.
+  auto writeVideoDeltas(const uint16_t* video) -> void {
+    static uint8_t* flat = nullptr;
+    if(!flat) flat = new uint8_t[VideoBytes];
+    if(video) flatten(flat, video); else memcpy(flat, videoShadow, videoLen);
+
+    uint32_t changed = 0;
+    for(unsigned n = 0; n < videoLen; n++) changed += flat[n] != videoShadow[n];
+    uint8_t count[4];
+    write32(count, changed);
+    fwrite(count, 1, 4, file);
+
+    for(unsigned n = 0; n < videoLen; n++) {
+      if(flat[n] == videoShadow[n]) continue;
+      uint8_t delta[5];
+      write32(delta, n);
+      delta[4] = flat[n];
+      fwrite(delta, 1, sizeof(delta), file);
+      videoShadow[n] = flat[n];
+    }
   }
 
   static auto write16(uint8_t* p, unsigned v) -> void {
@@ -160,8 +220,12 @@ private:
 
   static auto closeAtExit() -> void;
 
+  static constexpr unsigned VideoBytes = 64 * 1024;
+
   FILE* file = nullptr;
   uint8_t* shadow = nullptr;
+  uint8_t* videoShadow = nullptr;
+  unsigned videoLen = 0;
   unsigned len = 0;
   uint32_t frames = 0;
   unsigned input = 0;

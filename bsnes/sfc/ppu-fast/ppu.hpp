@@ -8,6 +8,10 @@
 #define PPU PPUfast
 
 struct PPU : PPUcounter {
+  //The recorder's view of video memory: 32768 words. Declared here beside the
+  //other read-only accessors; the array itself stays where it is.
+  auto vramForTrace() const -> const uint16* { return vram; }
+
   alwaysinline auto interlace() const -> bool;
   alwaysinline auto overscan() const -> bool;
   alwaysinline auto vdisp() const -> uint;

@@ -48,6 +48,7 @@ struct PPU : PPUcounter {
   //Where a VRAM transfer would land, for the DMA log. The address itself is
   //private and stays that way; this only reads it.
   auto vramAddressForTrace() const -> uint16 { return io.vramAddress; }
+  auto vramForTrace() const -> const uint16* { return vram; }
 
   //serialization.cpp
   auto serialize(serializer&) -> void;

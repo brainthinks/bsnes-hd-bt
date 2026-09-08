@@ -113,7 +113,9 @@ auto System::frameEvent() -> void {
   //record work RAM for verifying a reimplementation; inert unless enabled.
   //BSNES_TRACE_RAM_AT moves the snapshot to a routine's entry instead, and the
   //two must not both fire or the records would interleave
-  if(!RamTrace::snapshotting()) RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram));
+  if(!RamTrace::snapshotting()) {
+    RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram), {}, ppu.vramForTrace());
+  }
 
   //refresh all cheat codes once per frame
   Memory::GlobalWriteEnable = true;

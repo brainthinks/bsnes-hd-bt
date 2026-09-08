@@ -3,6 +3,11 @@ struct PPU : Thread, PPUcounter {
   //private; this only reads it.
   auto vramAddressForTrace() const -> uint16 { return io.vramAddress; }
 
+  //The active core's video memory for the recorder: 32768 words, low byte
+  //first when written out. Which core that is depends on a runtime setting, so
+  //this is defined in ppu.cpp where the other two are visible.
+  auto vramForTrace() const -> const uint16*;
+
   alwaysinline auto interlace() const -> bool { return display.interlace; }
   alwaysinline auto overscan() const -> bool { return display.overscan; }
   alwaysinline auto vdisp() const -> uint { return display.vdisp; }
