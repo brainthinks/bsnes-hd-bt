@@ -1,4 +1,5 @@
 #include <sfc/sfc.hpp>
+#include <emulator/hdtrace.hpp>
 
 namespace SuperFamicom {
 
@@ -163,6 +164,35 @@ auto PPU::refresh() -> void {
 
     if(auto device = controllerPort2.device) device->draw(output, pitch * sizeof(uint16), width, height);
     platform->videoFrame(output, pitch * sizeof(uint16), width, height, hd() ? hdScale() : 1);
+
+    //BSNES_FRAME_DIR + BSNES_FRAME_AT: write the chosen frames out as PPM.
+    //The same hook the HD renderer has, because this is the renderer a headless
+    //run actually uses - and a port with no reference picture can only be
+    //judged by eye, which is how a wrong one survives.
+    //
+    //Colour here is the SNES's own five bits a channel rather than the HD
+    //path's packed 32-bit, so it is widened by repeating the high bits into the
+    //low ones: that maps 31 to 255 exactly, where a plain shift would stop at
+    //248 and tint every bright pixel.
+    if(HdTrace::wantFrameDump(HdTrace::frame())) {
+      char path[512];
+      snprintf(path, sizeof(path), "%s/frame-%06u.ppm", getenv("BSNES_FRAME_DIR"), HdTrace::frame());
+      if(auto fp = fopen(path, "wb")) {
+        fprintf(fp, "P6\n%u %u\n255\n", width, height);
+        auto src = output;
+        for(uint row : range(height)) {
+          for(uint col : range(width)) {
+            uint16 c = src[col];
+            uint r = c >>  0 & 31, g = c >>  5 & 31, b = c >> 10 & 31;
+            fputc(r << 3 | r >> 2, fp);
+            fputc(g << 3 | g >> 2, fp);
+            fputc(b << 3 | b >> 2, fp);
+          }
+          src += pitch;
+        }
+        fclose(fp);
+      }
+    }
 
     frame.pitch  = pitch;
     frame.width  = width;
