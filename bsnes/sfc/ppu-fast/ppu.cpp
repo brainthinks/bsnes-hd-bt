@@ -1,5 +1,6 @@
 #include <sfc/sfc.hpp>
 #include <emulator/hdtrace.hpp>
+#include <emulator/ramtrace.hpp>
 
 namespace SuperFamicom {
 
@@ -170,20 +171,35 @@ auto PPU::refresh() -> void {
     //run actually uses - and a port with no reference picture can only be
     //judged by eye, which is how a wrong one survives.
     //
-    //Colour here is the SNES's own five bits a channel rather than the HD
-    //path's packed 32-bit, so it is widened by repeating the high bits into the
-    //low ones: that maps 31 to 255 exactly, where a plain shift would stop at
-    //248 and tint every bright pixel.
-    if(HdTrace::wantFrameDump(HdTrace::frame())) {
+    //Five bits a channel rather than the HD path's packed 32-bit, widened by
+    //repeating the high bits into the low ones: that maps 31 to 255 exactly,
+    //where a plain shift would stop at 248 and tint every bright pixel.
+    //
+    //Red is the HIGH five bits here, not the low ones. This buffer is not in
+    //CGRAM's order: lightTable maps an index of r<<10|g<<5|b to a value of
+    //b<<10|g<<5|r, so it swaps the outer channels on the way through, and
+    //target-bsnes/program/video.cpp reads the result back as r = color >> 10.
+    //Taking the low bits for red instead produces a picture that looks
+    //plausible and has red and blue exchanged - which, held up beside a port as
+    //the reference, condemns the port for the reference's mistake.
+    //Number the picture the way the recording numbers its frames, when one is
+    //being made. Otherwise a dump and a frame record with the same number are
+    //different moments - off by however many frames passed before recording
+    //began - and comparing them looks like a renderer that is nearly right
+    //rather than like a misalignment, which is a far harder mistake to see.
+    unsigned dumpFrame = RamTrace::recorder().recording()
+                       ? RamTrace::recorder().recordedFrames()
+                       : HdTrace::frame();
+    if(HdTrace::wantFrameDump(dumpFrame)) {
       char path[512];
-      snprintf(path, sizeof(path), "%s/frame-%06u.ppm", getenv("BSNES_FRAME_DIR"), HdTrace::frame());
+      snprintf(path, sizeof(path), "%s/frame-%06u.ppm", getenv("BSNES_FRAME_DIR"), dumpFrame);
       if(auto fp = fopen(path, "wb")) {
         fprintf(fp, "P6\n%u %u\n255\n", width, height);
         auto src = output;
         for(uint row : range(height)) {
           for(uint col : range(width)) {
             uint16 c = src[col];
-            uint r = c >>  0 & 31, g = c >>  5 & 31, b = c >> 10 & 31;
+            uint r = c >> 10 & 31, g = c >>  5 & 31, b = c >>  0 & 31;
             fputc(r << 3 | r >> 2, fp);
             fputc(g << 3 | g >> 2, fp);
             fputc(b << 3 | b >> 2, fp);

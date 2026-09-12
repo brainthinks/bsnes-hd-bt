@@ -231,6 +231,15 @@ private:
   unsigned input = 0;
   unsigned skip = 0;
   bool started = false;
+
+public:
+  //Which frame of the recording has been written. A picture dumped for
+  //comparison has to be numbered the same way the recording is, or the two are
+  //off by however many frames passed before recording began - and a comparison
+  //of adjacent frames of a racing game looks like a renderer that is nearly
+  //right rather than like a misalignment.
+  auto recordedFrames() const -> uint32_t { return frames; }
+  auto recording() const -> bool { return file != nullptr; }
 };
 
 // Which code writes a range of memory.
