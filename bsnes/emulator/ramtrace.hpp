@@ -21,15 +21,23 @@
 // port that draws: a routine whose whole job is moving bytes into video memory
 // has nothing to be compared against without it.
 //
+// BSNES_TRACE_SRAM=1 does the same for the cartridge's battery RAM, the bank
+// $70 the game keeps its saved times in. Off by default for the same reason:
+// almost nothing reads it, and the one subsystem that does - the save block's
+// checksum - cannot be checked at all without it, because it sums bytes that
+// live nowhere else.
+//
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      3
+//   uint16 version      4
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
 //   uint32 vram_len     0x10000, or 0 when video memory was not recorded
+//   uint32 save_len     the cartridge's battery RAM, or 0 when not recorded
 //   uint8  initial[ram_len]
 //   uint8  initial_vram[vram_len]
+//   uint8  initial_save[save_len]
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
 //     Registers regs    the machine when this record was taken
@@ -37,9 +45,12 @@
 //     per delta: uint32 offset, uint8 value
 //     uint32 vram_delta_count   (absent when vram_len is 0)
 //     per delta: uint32 offset, uint8 value
+//     uint32 save_delta_count   (absent when save_len is 0)
+//     per delta: uint32 offset, uint8 value
 //
-// Version 2 is the same without the two vram fields and the per-frame vram
-// section. Readers accept both.
+// Version 3 is the same without save_len, initial_save and the per-frame save
+// section; version 2 is version 3 without the two vram fields and the
+// per-frame vram section. Readers accept all three.
 //
 // Registers is a,x,y,s,d as uint16 then db,p as uint8: twelve bytes. They are
 // needed because routines take their arguments in registers as often as in
@@ -65,16 +76,17 @@ struct Recorder {
   // Called once per frame with work RAM as it stands at the end of it. The
   // first call establishes the starting state and emits no frame record.
   auto observe(const uint8_t* ram, unsigned length, const Snapshot& regs = {},
-               const uint16_t* video = nullptr) -> void {
+               const uint16_t* video = nullptr, const uint8_t* save = nullptr,
+               unsigned saveSize = 0) -> void {
     if(!enabled(length)) return;
     if(!started) {
       started = true;
-      if(!open(length, ram, regs, video)) return;
+      if(!open(length, ram, regs, video, save, saveSize)) return;
       return;
     }
     if(!file) return;
     if(skip) { skip--; return; }
-    writeFrame(ram, regs, video);
+    writeFrame(ram, regs, video, save);
   }
 
   // One button, as the SNES gamepad enum orders them. Accumulated until the
@@ -95,6 +107,8 @@ struct Recorder {
     shadow = nullptr;
     delete[] videoShadow;
     videoShadow = nullptr;
+    delete[] saveShadow;
+    saveShadow = nullptr;
   }
 
 private:
@@ -118,7 +132,7 @@ private:
   }
 
   auto open(unsigned length, const uint8_t* ram, const Snapshot& regs,
-            const uint16_t* video) -> bool {
+            const uint16_t* video, const uint8_t* save, unsigned saveSize) -> bool {
     auto path = getenv("BSNES_TRACE_RAM");
     if(!path) return false;
     if(auto after = getenv("BSNES_TRACE_RAM_AFTER")) skip = (unsigned)atoi(after);
@@ -136,15 +150,24 @@ private:
       flatten(videoShadow, video);
     }
 
-    uint8_t header[30] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 3);
+    //The cartridge's battery RAM, on the same terms.
+    if(save && saveSize && getenv("BSNES_TRACE_SRAM")) saveLen = saveSize;
+    if(saveLen) {
+      saveShadow = new uint8_t[saveLen];
+      memcpy(saveShadow, save, saveLen);
+    }
+
+    uint8_t header[34] = {'F', 'Z', 'T', 'R'};
+    write16(header + 4, 4);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
     write32(header + 26, videoLen);
+    write32(header + 30, saveLen);
     fwrite(header, 1, sizeof(header), file);
     fwrite(ram, 1, len, file);
     if(videoLen) fwrite(videoShadow, 1, videoLen, file);
+    if(saveLen) fwrite(saveShadow, 1, saveLen, file);
     atexit(closeAtExit);
     return true;
   }
@@ -158,7 +181,8 @@ private:
     }
   }
 
-  auto writeFrame(const uint8_t* ram, const Snapshot& regs, const uint16_t* video) -> void {
+  auto writeFrame(const uint8_t* ram, const Snapshot& regs, const uint16_t* video,
+                  const uint8_t* save) -> void {
     // count first, so the record can be written in one pass
     uint32_t changed = 0;
     for(unsigned n = 0; n < len; n++) changed += ram[n] != shadow[n];
@@ -178,8 +202,29 @@ private:
       shadow[n] = ram[n];
     }
     if(videoLen) writeVideoDeltas(video);
+    if(saveLen) writeSaveDeltas(save);
     frames++;
     input = 0;
+  }
+
+  //And over battery RAM, which changes on almost no frame at all: the game
+  //writes it when a race is saved or a slot erased and never otherwise.
+  auto writeSaveDeltas(const uint8_t* save) -> void {
+    uint32_t changed = 0;
+    if(save) for(unsigned n = 0; n < saveLen; n++) changed += save[n] != saveShadow[n];
+    uint8_t count[4];
+    write32(count, changed);
+    fwrite(count, 1, 4, file);
+    if(!save) return;
+
+    for(unsigned n = 0; n < saveLen; n++) {
+      if(save[n] == saveShadow[n]) continue;
+      uint8_t delta[5];
+      write32(delta, n);
+      delta[4] = save[n];
+      fwrite(delta, 1, sizeof(delta), file);
+      saveShadow[n] = save[n];
+    }
   }
 
   //The same delta pass over video memory. A frame of racing changes a few
@@ -226,6 +271,8 @@ private:
   uint8_t* shadow = nullptr;
   uint8_t* videoShadow = nullptr;
   unsigned videoLen = 0;
+  uint8_t* saveShadow = nullptr;
+  unsigned saveLen = 0;
   unsigned len = 0;
   uint32_t frames = 0;
   unsigned input = 0;

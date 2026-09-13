@@ -114,7 +114,8 @@ auto System::frameEvent() -> void {
   //BSNES_TRACE_RAM_AT moves the snapshot to a routine's entry instead, and the
   //two must not both fire or the records would interleave
   if(!RamTrace::snapshotting()) {
-    RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram), {}, ppu.vramForTrace());
+    RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram), {}, ppu.vramForTrace(),
+                                 cartridge.ram.data(), cartridge.ram.size());
   }
 
   //refresh all cheat codes once per frame

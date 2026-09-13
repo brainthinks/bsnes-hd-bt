@@ -46,7 +46,8 @@ auto CPU::main() -> void {
     RamTrace::Snapshot regs;
     regs.a = r.a.w; regs.x = r.x.w; regs.y = r.y.w;
     regs.s = r.s.w; regs.d = r.d.w; regs.db = r.b; regs.p = r.p;
-    RamTrace::recorder().observe(wram, sizeof(wram), regs, ppu.vramForTrace());
+    RamTrace::recorder().observe(wram, sizeof(wram), regs, ppu.vramForTrace(),
+                                 cartridge.ram.data(), cartridge.ram.size());
   }
   if(!status.interruptPending) return instruction();
 
