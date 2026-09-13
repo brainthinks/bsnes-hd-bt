@@ -64,7 +64,11 @@ auto Program::load() -> void {
     verified() ? "Verified game loaded" : "Game loaded",
     appliedPatch() ? " and patch applied" : ""
   });
-  presentation.setFocused();
+  //BSNES_HEADLESS=1: focusing the window is what maps it, so a measurement
+  //run would take the screen here however carefully Program::create avoided
+  //it. The title is set either way; it costs nothing and it is what the
+  //window would be called if anyone did look at it.
+  if(!HdTrace::headless()) presentation.setFocused();
   presentation.setTitle(emulator->title());
   presentation.resetSystem.setEnabled(true);
   presentation.unloadGame.setEnabled(true);
