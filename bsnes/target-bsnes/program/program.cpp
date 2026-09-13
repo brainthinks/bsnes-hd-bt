@@ -21,8 +21,14 @@ auto Program::create() -> void {
   Emulator::platform = this;
 
   presentation.create();
-  presentation.setVisible();
-  presentation.viewport.setFocused();
+  //BSNES_HEADLESS=1: a measurement run has no business on the screen or in the
+  //keyboard focus. The frame is not presented either way; not mapping the
+  //window as well is what makes a run of eighty recordings something you can
+  //work through rather than something you have to sit out.
+  if(!HdTrace::headless()) {
+    presentation.setVisible();
+    presentation.viewport.setFocused();
+  }
 
   settingsWindow.create();
   videoSettings.create();
