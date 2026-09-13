@@ -4,6 +4,7 @@
 //Every entry point is a no-op unless its BSNES_* variable is set, so ordinary
 //builds behave exactly as they did before.
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,8 +63,58 @@ namespace HdTrace {
     return count ? points : nullptr;
   }
 
+  //BSNES_SCRIPT_FILE=<path>: one little-endian uint16 per frame, in the
+  //gamepad enum's bit order -- up down left right b a y x l r select start,
+  //bit 0 to bit 11. Waypoints top out at 64 and are meant to be written by
+  //hand; this is for input a program worked out, where the buttons change
+  //every frame and there are thousands of them. Past the end of the file
+  //nothing is held.
+  inline auto scriptFile() -> const uint16_t* {
+    static uint16_t* frames = nullptr;
+    static long count = -1;
+    if(count < 0) {
+      count = 0;
+      if(auto path = getenv("BSNES_SCRIPT_FILE")) {
+        if(auto file = fopen(path, "rb")) {
+          fseek(file, 0, SEEK_END);
+          long size = ftell(file);
+          fseek(file, 0, SEEK_SET);
+          count = size / 2;
+          if(count > 0) {
+            frames = new uint16_t[count];
+            if(fread(frames, 2, (size_t)count, file) != (size_t)count) count = 0;
+          }
+          fclose(file);
+        }
+      }
+    }
+    return count > 0 ? frames : nullptr;
+  }
+
+  inline auto scriptFileCount() -> long {
+    scriptFile();
+    static long remembered = -1;
+    if(remembered < 0) {
+      remembered = 0;
+      if(auto path = getenv("BSNES_SCRIPT_FILE")) {
+        if(auto file = fopen(path, "rb")) {
+          fseek(file, 0, SEEK_END);
+          remembered = ftell(file) / 2;
+          fclose(file);
+        }
+      }
+    }
+    return remembered;
+  }
+
   //-1: no script, leave input to the hardware. 0/1: scripted button state.
   inline auto scriptedInput(unsigned input) -> int {
+    if(auto frames = scriptFile()) {
+      unsigned held = 0;
+      long at = (long)frame();
+      if(at >= 0 && at < scriptFileCount()) held = frames[at];
+      return input < 12 && (held >> input & 1) ? 1 : 0;
+    }
     auto points = script();
     if(!points) return -1;
     unsigned held = 0;
@@ -93,6 +144,26 @@ namespace HdTrace {
     static int on = -1;
     if(on < 0) on = getenv("BSNES_TIME_FRAME") ? 1 : 0;
     return on == 1;
+  }
+
+  //BSNES_SAVE_STATE_AT=<frame>:<slot>: write a save state at that frame, so a
+  //hard-to-reach moment becomes a starting point like any other. The five
+  //states that ship beside a ROM are wherever somebody happened to stop; this
+  //makes "the flag has just dropped on a Grand Prix" reachable in one step,
+  //and deterministic, which a cold boot is not.
+  inline auto saveStateAt(unsigned& slot) -> unsigned {
+    static int at = -1;
+    static unsigned which = 1;
+    if(at < 0) {
+      at = 0;
+      if(auto text = getenv("BSNES_SAVE_STATE_AT")) {
+        char* end = nullptr;
+        at = (int)strtoul(text, &end, 10);
+        if(end && *end == ':') which = (unsigned)strtoul(end + 1, nullptr, 10);
+      }
+    }
+    slot = which;
+    return (unsigned)at;
   }
 
   inline auto quitAfter() -> unsigned {

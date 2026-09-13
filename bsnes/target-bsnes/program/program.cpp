@@ -121,6 +121,9 @@ auto Program::main() -> void {
   rewindRun();
 
   HdTrace::advanceFrame();
+  if(unsigned slot = 1; auto at = HdTrace::saveStateAt(slot)) {
+    if(HdTrace::frame() == at) program.saveState({"Quick/Slot ", slot});
+  }
   if(auto limit = HdTrace::quitAfter(); limit && HdTrace::frame() > limit) return program.quit();
 
   //BSNES_TIME_FRAME=1: where the wall clock goes, for measurement runs
