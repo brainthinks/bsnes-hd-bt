@@ -534,10 +534,32 @@ inline auto coverageWanted(unsigned frame) -> bool {
   return false;
 }
 
+inline auto bracketCovers(unsigned pc) -> bool;   //defined below, with the trigger
+
+//BSNES_TRACE_EXEC_BRACKET=1: with BSNES_TRACE_RAM_PAIRED, record coverage only
+//between the entry and the exit - the instructions a paired comparison
+//actually compares. Everything else the recording runs is outside the bracket
+//and outside what the check proves.
+inline auto coverageBracketed() -> bool {
+  static int on = -1;
+  if(on < 0) {
+    on = getenv("BSNES_TRACE_EXEC_BRACKET") ? 1 : 0;
+    if(on && !getenv("BSNES_TRACE_RAM_PAIRED")) {
+      fprintf(stderr, "BSNES_TRACE_EXEC_BRACKET needs BSNES_TRACE_RAM_PAIRED: "
+                      "without a pair there is no bracket to stay inside\n");
+      exit(1);
+    }
+  }
+  return on == 1;
+}
+
 inline auto tracingExec() -> bool {
   return coverage().enabled() && coverageWanted(recorder().recordedFrames());
 }
-inline auto noteExec(unsigned pc, bool m8, bool x8) -> void { coverage().note(pc, m8, x8); }
+inline auto noteExec(unsigned pc, bool m8, bool x8) -> void {
+  if(coverageBracketed() && !bracketCovers(pc)) return;
+  coverage().note(pc, m8, x8);
+}
 inline auto noteRead(unsigned address) -> void { coverage().noteRead(address); }
 
 inline auto watch() -> WriteWatch& {
@@ -684,6 +706,17 @@ struct EntryTrigger {
     return state == 1;
   }
 
+  //Whether a paired comparison covers this instruction: everything from the
+  //entry up to but not including the exit, which is the instruction after the
+  //call site and belongs to the caller. Asked before matches() has updated
+  //`inside`, so the entry has to be named rather than inferred.
+  auto covers(unsigned address) -> bool {
+    if(!paired) return false;
+    if(address == pcs[0]) return true;
+    if(address == pcs[1]) return false;
+    return inside;
+  }
+
   auto matches(unsigned address) -> bool {
     if(paired) {
       if(address == pcs[0]) {
@@ -715,6 +748,7 @@ inline auto entryTrigger() -> EntryTrigger& {
 }
 
 inline auto snapshotting() -> bool { return entryTrigger().enabled(); }
+inline auto bracketCovers(unsigned pc) -> bool { return entryTrigger().covers(pc); }
 inline auto atEntry(unsigned pc) -> bool { return entryTrigger().matches(pc); }
 
 inline auto Recorder::closeAtExit() -> void { recorder().close(); }
