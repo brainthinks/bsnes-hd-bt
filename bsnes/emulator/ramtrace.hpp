@@ -483,7 +483,60 @@ inline auto coverage() -> Coverage& {
 
 inline auto Coverage::writeAtExit() -> void { coverage().write(); }
 
-inline auto tracingExec() -> bool { return coverage().enabled(); }
+inline auto recorder() -> Recorder&;   //defined below; it owns the frame count
+
+//BSNES_TRACE_EXEC_FRAMES="a-b,c-d,...": record coverage only while the frame
+//being recorded falls inside one of these ranges, both ends included. Unset
+//records every frame, which is what it has always done.
+//
+//A map covers whatever the run covered, so a verification that compares only
+//part of a recording cannot honestly count a map that covers all of it - it
+//would be claiming frames nobody checked. The long Grand Prix run is the case
+//that matters: thirty-nine thousand of its forty thousand frames are compared
+//byte for byte, and a handful in the middle cannot be, because the machine did
+//not finish them inside a video frame. Told which ranges were compared, the
+//recorder writes a map of exactly those.
+inline auto coverageWanted(unsigned frame) -> bool {
+  static int parsed = -1;
+  static unsigned low[256], high[256], count = 0;
+  if(parsed < 0) {
+    parsed = 0;
+    if(auto text = getenv("BSNES_TRACE_EXEC_FRAMES")) {
+      parsed = 1;
+      const char* p = text;
+      while(*p && count < 256) {
+        unsigned first = (unsigned)strtoul(p, (char**)&p, 10);
+        unsigned last = first;
+        if(*p == '-') { p++; last = (unsigned)strtoul(p, (char**)&p, 10); }
+        low[count] = first; high[count] = last; count++;
+        while(*p && *p != ',') p++;
+        if(*p == ',') p++;
+      }
+    }
+  }
+  if(parsed == 0) return true;
+  //The frame this counts is the one the RAM trace is writing, which is
+  //deliberate: it is the same numbering fzero-verify and tools/segments.py
+  //use, and a frame counter of its own would be free to disagree with them.
+  //The cost is that without BSNES_TRACE_RAM the count never moves and every
+  //instruction looks like frame nought, so say so rather than quietly writing
+  //a map of the wrong thing.
+  if(!getenv("BSNES_TRACE_RAM")) {
+    static bool said = false;
+    if(!said) {
+      said = true;
+      fprintf(stderr, "BSNES_TRACE_EXEC_FRAMES needs BSNES_TRACE_RAM: "
+                      "the frames it counts are the ones being recorded\n");
+    }
+    return false;
+  }
+  for(unsigned i = 0; i < count; i++) if(frame >= low[i] && frame <= high[i]) return true;
+  return false;
+}
+
+inline auto tracingExec() -> bool {
+  return coverage().enabled() && coverageWanted(recorder().recordedFrames());
+}
 inline auto noteExec(unsigned pc, bool m8, bool x8) -> void { coverage().note(pc, m8, x8); }
 inline auto noteRead(unsigned address) -> void { coverage().noteRead(address); }
 
