@@ -29,6 +29,8 @@ struct DSP {
   auto phaseForTrace() const -> uint { return spc_dsp.phaseForTrace(); }
   auto rateCounterForTrace() const -> uint { return spc_dsp.rateCounterForTrace(); }
   auto alternateForTrace() const -> uint { return spc_dsp.alternateForTrace(); }
+  auto envelopeForTrace(uint v) const -> uint { return spc_dsp.envelopeForTrace(v); }
+  auto envelopePhaseForTrace(uint v) const -> uint { return spc_dsp.envelopePhaseForTrace(v); }
 
   //BSNES_DUMP_SAMPLES, which writes this chip's output where a reimplementation
   //of it can be compared against it one sample at a time.

@@ -129,10 +129,17 @@ auto DSP::dumpVoices() -> void {
     if(auto path = getenv("BSNES_DUMP_VOICES")) file = fopen(path, "wb");
   }
   if(!file) return;
-  uint8 row[16];
+  //Sixteen bytes of what a driver could read, then sixteen of what it could
+  //not: each voice's envelope to its full eleven bits and which of the four
+  //phases it is in. Two implementations whose readable registers agree can
+  //still be a few hundredths apart underneath, and this is where that shows.
+  uint8 row[32];
   for(uint v : range(8)) {
     row[v] = spc_dsp.read(v * 0x10 + 8);
     row[8 + v] = spc_dsp.read(v * 0x10 + 9);
+    uint env = spc_dsp.envelopeForTrace(v);
+    row[16 + v * 2] = env & 0xff;
+    row[17 + v * 2] = (env >> 8 & 0x07) | (spc_dsp.envelopePhaseForTrace(v) & 3) << 3;
   }
   fwrite(row, 1, sizeof(row), file);
 }

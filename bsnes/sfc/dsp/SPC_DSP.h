@@ -251,6 +251,12 @@ public:
     //and neither can be seen from outside the chip.
     int rateCounterForTrace() const { return m.counter; }
     int alternateForTrace() const { return m.every_other_sample; }
+    //A voice's envelope to its full eleven bits, and which of the four phases
+    //it is in. The register a driver can read shows only the top seven bits of
+    //the first and none of the second, which is not enough to say why two
+    //implementations of this chip are producing different numbers.
+    int envelopeForTrace(int v) const { return m.voices[v].env; }
+    int envelopePhaseForTrace(int v) const { return m.voices[v].env_mode; }
 };
 
 #include <assert.h>
