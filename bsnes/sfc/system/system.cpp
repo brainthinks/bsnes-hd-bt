@@ -115,7 +115,9 @@ auto System::frameEvent() -> void {
   //two must not both fire or the records would interleave
   if(!RamTrace::snapshotting()) {
     RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram), {}, ppu.vramForTrace(),
-                                 cartridge.ram.data(), cartridge.ram.size());
+                                 cartridge.ram.data(), cartridge.ram.size(),
+                                 dsp.apuramForTrace(), dsp.registersForTrace(),
+                                 dsp.echoWritesToAudioRam());
   }
 
   //refresh all cheat codes once per frame

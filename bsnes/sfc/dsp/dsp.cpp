@@ -73,6 +73,17 @@ auto DSP::power(bool reset) -> void {
   }
 }
 
+auto DSP::registersForTrace() -> const uint8* {
+  for(uint address : range(SPC_DSP::register_count)) {
+    traceRegisters[address] = spc_dsp.read(address);
+  }
+  return traceRegisters;
+}
+
+auto DSP::echoWritesToAudioRam() const -> bool {
+  return !configuration.hacks.dsp.echoShadow;
+}
+
 auto DSP::mute() -> bool {
   return spc_dsp.mute();
 }

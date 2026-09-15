@@ -27,17 +27,30 @@
 // checksum - cannot be checked at all without it, because it sums bytes that
 // live nowhere else.
 //
+// BSNES_TRACE_APU=1 does the same for the audio processor's own 64K of RAM and
+// the sound chip's 128 registers. Off by default, and bigger than either of the
+// above, but it is the only way to check anything about sound at all: the 65816
+// cannot reach audio RAM, and everything the sound driver does happens out of
+// its sight. Recording it needs the echo buffer to be going into audio RAM
+// rather than into the emulator's private shadow, so the recorder refuses when
+// the echo-shadow hack is on rather than writing a recording that differs from
+// the machine.
+//
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      4
+//   uint16 version      5
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
 //   uint32 vram_len     0x10000, or 0 when video memory was not recorded
 //   uint32 save_len     the cartridge's battery RAM, or 0 when not recorded
+//   uint32 apu_len      0x10000, or 0 when audio RAM was not recorded
+//   uint32 dsp_len      128, or 0 when the sound registers were not recorded
 //   uint8  initial[ram_len]
 //   uint8  initial_vram[vram_len]
 //   uint8  initial_save[save_len]
+//   uint8  initial_apu[apu_len]
+//   uint8  initial_dsp[dsp_len]
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
 //     Registers regs    the machine when this record was taken
@@ -47,10 +60,16 @@
 //     per delta: uint32 offset, uint8 value
 //     uint32 save_delta_count   (absent when save_len is 0)
 //     per delta: uint32 offset, uint8 value
+//     uint32 apu_delta_count    (absent when apu_len is 0)
+//     per delta: uint32 offset, uint8 value
+//     uint32 dsp_delta_count    (absent when dsp_len is 0)
+//     per delta: uint32 offset, uint8 value
 //
-// Version 3 is the same without save_len, initial_save and the per-frame save
-// section; version 2 is version 3 without the two vram fields and the
-// per-frame vram section. Readers accept all three.
+// Version 4 is the same without the two audio lengths, the two initial audio
+// blocks and the two per-frame audio sections; version 3 is version 4 without
+// save_len, initial_save and the per-frame save section; version 2 is version 3
+// without the two vram fields and the per-frame vram section. Readers accept
+// all four.
 //
 // Registers is a,x,y,s,d as uint16 then db,p as uint8: twelve bytes. They are
 // needed because routines take their arguments in registers as often as in
@@ -77,16 +96,17 @@ struct Recorder {
   // first call establishes the starting state and emits no frame record.
   auto observe(const uint8_t* ram, unsigned length, const Snapshot& regs = {},
                const uint16_t* video = nullptr, const uint8_t* save = nullptr,
-               unsigned saveSize = 0) -> void {
+               unsigned saveSize = 0, const uint8_t* apu = nullptr,
+               const uint8_t* dspRegs = nullptr, bool audioIsHonest = true) -> void {
     if(!enabled(length)) return;
     if(!started) {
       started = true;
-      if(!open(length, ram, regs, video, save, saveSize)) return;
+      if(!open(length, ram, regs, video, save, saveSize, apu, dspRegs, audioIsHonest)) return;
       return;
     }
     if(!file) return;
     if(skip) { skip--; return; }
-    writeFrame(ram, regs, video, save);
+    writeFrame(ram, regs, video, save, apu, dspRegs);
   }
 
   // One button, as the SNES gamepad enum orders them. Accumulated until the
@@ -109,6 +129,10 @@ struct Recorder {
     videoShadow = nullptr;
     delete[] saveShadow;
     saveShadow = nullptr;
+    delete[] apuShadow;
+    apuShadow = nullptr;
+    delete[] dspShadow;
+    dspShadow = nullptr;
   }
 
 private:
@@ -132,7 +156,8 @@ private:
   }
 
   auto open(unsigned length, const uint8_t* ram, const Snapshot& regs,
-            const uint16_t* video, const uint8_t* save, unsigned saveSize) -> bool {
+            const uint16_t* video, const uint8_t* save, unsigned saveSize,
+            const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest) -> bool {
     auto path = getenv("BSNES_TRACE_RAM");
     if(!path) return false;
     if(auto after = getenv("BSNES_TRACE_RAM_AFTER")) skip = (unsigned)atoi(after);
@@ -157,17 +182,41 @@ private:
       memcpy(saveShadow, save, saveLen);
     }
 
-    uint8_t header[34] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 4);
+    //And the audio processor's RAM with the sound chip's registers, which are
+    //asked for and recorded together: neither says much without the other.
+    //A recording whose echo buffer went somewhere other than audio RAM would
+    //not match the machine, so say so and record nothing rather than record
+    //something that cannot be checked.
+    if(apu && dspRegs && getenv("BSNES_TRACE_APU")) {
+      if(!audioIsHonest) {
+        fprintf(stderr, "BSNES_TRACE_APU: refusing, the echo buffer is shadowed\n");
+      } else {
+        apuLen = AudioBytes;
+        dspLen = SoundRegisters;
+      }
+    }
+    if(apuLen) {
+      apuShadow = new uint8_t[apuLen];
+      memcpy(apuShadow, apu, apuLen);
+      dspShadow = new uint8_t[dspLen];
+      memcpy(dspShadow, dspRegs, dspLen);
+    }
+
+    uint8_t header[42] = {'F', 'Z', 'T', 'R'};
+    write16(header + 4, 5);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
     write32(header + 26, videoLen);
     write32(header + 30, saveLen);
+    write32(header + 34, apuLen);
+    write32(header + 38, dspLen);
     fwrite(header, 1, sizeof(header), file);
     fwrite(ram, 1, len, file);
     if(videoLen) fwrite(videoShadow, 1, videoLen, file);
     if(saveLen) fwrite(saveShadow, 1, saveLen, file);
+    if(apuLen) fwrite(apuShadow, 1, apuLen, file);
+    if(dspLen) fwrite(dspShadow, 1, dspLen, file);
     atexit(closeAtExit);
     return true;
   }
@@ -182,7 +231,7 @@ private:
   }
 
   auto writeFrame(const uint8_t* ram, const Snapshot& regs, const uint16_t* video,
-                  const uint8_t* save) -> void {
+                  const uint8_t* save, const uint8_t* apu, const uint8_t* dspRegs) -> void {
     // count first, so the record can be written in one pass
     uint32_t changed = 0;
     for(unsigned n = 0; n < len; n++) changed += ram[n] != shadow[n];
@@ -202,28 +251,36 @@ private:
       shadow[n] = ram[n];
     }
     if(videoLen) writeVideoDeltas(video);
-    if(saveLen) writeSaveDeltas(save);
+    if(saveLen) writeDeltas(save, saveShadow, saveLen);
+    if(apuLen) writeDeltas(apu, apuShadow, apuLen);
+    if(dspLen) writeDeltas(dspRegs, dspShadow, dspLen);
     frames++;
     input = 0;
   }
 
-  //And over battery RAM, which changes on almost no frame at all: the game
-  //writes it when a race is saved or a slot erased and never otherwise.
-  auto writeSaveDeltas(const uint8_t* save) -> void {
+  //One region's worth of changes: a count, then that many offset-and-value
+  //pairs, then the shadow catches up. How busy a region is varies enormously -
+  //battery RAM changes on almost no frame at all, the game writing it only when
+  //a race is saved or a slot erased, while the sound registers change on nearly
+  //every one - but the record is shaped the same for all of them.
+  //
+  //A caller with nothing to give writes an empty record rather than skipping
+  //it, because the section's presence is fixed by the header.
+  auto writeDeltas(const uint8_t* now, uint8_t* shadowed, unsigned length) -> void {
     uint32_t changed = 0;
-    if(save) for(unsigned n = 0; n < saveLen; n++) changed += save[n] != saveShadow[n];
+    if(now) for(unsigned n = 0; n < length; n++) changed += now[n] != shadowed[n];
     uint8_t count[4];
     write32(count, changed);
     fwrite(count, 1, 4, file);
-    if(!save) return;
+    if(!now) return;
 
-    for(unsigned n = 0; n < saveLen; n++) {
-      if(save[n] == saveShadow[n]) continue;
+    for(unsigned n = 0; n < length; n++) {
+      if(now[n] == shadowed[n]) continue;
       uint8_t delta[5];
       write32(delta, n);
-      delta[4] = save[n];
+      delta[4] = now[n];
       fwrite(delta, 1, sizeof(delta), file);
-      saveShadow[n] = save[n];
+      shadowed[n] = now[n];
     }
   }
 
@@ -234,21 +291,7 @@ private:
     static uint8_t* flat = nullptr;
     if(!flat) flat = new uint8_t[VideoBytes];
     if(video) flatten(flat, video); else memcpy(flat, videoShadow, videoLen);
-
-    uint32_t changed = 0;
-    for(unsigned n = 0; n < videoLen; n++) changed += flat[n] != videoShadow[n];
-    uint8_t count[4];
-    write32(count, changed);
-    fwrite(count, 1, 4, file);
-
-    for(unsigned n = 0; n < videoLen; n++) {
-      if(flat[n] == videoShadow[n]) continue;
-      uint8_t delta[5];
-      write32(delta, n);
-      delta[4] = flat[n];
-      fwrite(delta, 1, sizeof(delta), file);
-      videoShadow[n] = flat[n];
-    }
+    writeDeltas(flat, videoShadow, videoLen);
   }
 
   static auto write16(uint8_t* p, unsigned v) -> void {
@@ -266,6 +309,8 @@ private:
   static auto closeAtExit() -> void;
 
   static constexpr unsigned VideoBytes = 64 * 1024;
+  static constexpr unsigned AudioBytes = 64 * 1024;
+  static constexpr unsigned SoundRegisters = 128;
 
   FILE* file = nullptr;
   uint8_t* shadow = nullptr;
@@ -273,6 +318,10 @@ private:
   unsigned videoLen = 0;
   uint8_t* saveShadow = nullptr;
   unsigned saveLen = 0;
+  uint8_t* apuShadow = nullptr;
+  unsigned apuLen = 0;
+  uint8_t* dspShadow = nullptr;
+  unsigned dspLen = 0;
   unsigned len = 0;
   uint32_t frames = 0;
   unsigned input = 0;

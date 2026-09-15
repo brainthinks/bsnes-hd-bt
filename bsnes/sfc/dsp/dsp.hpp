@@ -12,6 +12,22 @@ struct DSP {
   auto power(bool reset) -> void;
   auto mute() -> bool;
 
+  //For BSNES_TRACE_APU. Audio RAM is the one memory the 65816 cannot reach:
+  //it talks to the sound processor only through $2140-$2143, so a recording
+  //that does not carry this cannot say anything about what the sound driver
+  //the cartridge uploaded is doing.
+  auto apuramForTrace() const -> const uint8* { return apuram; }
+
+  //The sound chip's 128 registers, copied out for the recorder. They live
+  //inside the DSP core rather than in a buffer of their own, so collecting
+  //them means asking for them one at a time.
+  auto registersForTrace() -> const uint8*;
+
+  //Whether apuram is the truth. With the echo-shadow hack on, the echo buffer
+  //is written to a private copy instead of into audio RAM, so a recording made
+  //that way would differ from the machine over whatever the echo covers.
+  auto echoWritesToAudioRam() const -> bool;
+
   auto serialize(serializer&) -> void;
 
   int64 clock = 0;
@@ -23,6 +39,7 @@ private:
 
 //unserialized:
   uint8 echoram[64 * 1024] = {};
+  uint8 traceRegisters[SPC_DSP::register_count] = {};
 };
 
 extern DSP dsp;

@@ -47,7 +47,9 @@ auto CPU::main() -> void {
     regs.a = r.a.w; regs.x = r.x.w; regs.y = r.y.w;
     regs.s = r.s.w; regs.d = r.d.w; regs.db = r.b; regs.p = r.p;
     RamTrace::recorder().observe(wram, sizeof(wram), regs, ppu.vramForTrace(),
-                                 cartridge.ram.data(), cartridge.ram.size());
+                                 cartridge.ram.data(), cartridge.ram.size(),
+                                 dsp.apuramForTrace(), dsp.registersForTrace(),
+                                 dsp.echoWritesToAudioRam());
   }
   if(!status.interruptPending) return instruction();
 
