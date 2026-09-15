@@ -23,6 +23,11 @@ struct DSP {
   //them means asking for them one at a time.
   auto registersForTrace() -> const uint8*;
 
+  //BSNES_DUMP_CONSOLE, which writes the console's own read-only tables out
+  //once at power so a reimplementation can be given them rather than carry
+  //them in its source.
+  auto dumpConsoleTables() -> void;
+
   //Whether apuram is the truth. With the echo-shadow hack on, the echo buffer
   //is written to a private copy instead of into audio RAM, so a recording made
   //that way would differ from the machine over whatever the echo covers.

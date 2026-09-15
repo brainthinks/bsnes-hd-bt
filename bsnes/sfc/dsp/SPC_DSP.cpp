@@ -135,6 +135,11 @@ static short const gauss [512] =
 1299,1300,1300,1301,1302,1302,1303,1303,1303,1304,1304,1304,1304,1304,1305,1305,
 };
 
+// For BSNES_DUMP_CONSOLE. The table is the sound chip's own and belongs to
+// whoever made the chip; this only hands it to a caller that already has one.
+short const* spc_dsp_gauss_table() { return gauss; }
+
+
 inline int SPC_DSP::interpolate( voice_t const* v )
 {
 	int out;
