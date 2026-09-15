@@ -24,6 +24,11 @@ auto DSP::main() -> void {
       float right = samplebuffer[n + 1] / 32768.0f;
       stream->sample(left, right);
     }
+    //BSNES_DUMP_SAMPLES: the sound chip's own output, as signed sixteen bit
+    //pairs. Nothing else lets a reimplementation of the chip be compared
+    //sample by sample rather than once a frame, which is five hundred samples
+    //too coarse to find anything.
+    if(!system.runAhead) dumpSamples(samplebuffer, count);
     spc_dsp.set_output(samplebuffer, 8192);
   }
 }
@@ -98,6 +103,20 @@ auto DSP::dumpConsoleTables() -> void {
   fprintf(stderr, "BSNES_DUMP_CONSOLE: wrote %s\n", path);
 }
 
+auto DSP::dumpSamples(const int16* samples, uint count) -> void {
+  static FILE* file = nullptr;
+  static bool tried = false;
+  if(!tried) {
+    tried = true;
+    if(auto path = getenv("BSNES_DUMP_SAMPLES")) file = fopen(path, "wb");
+  }
+  if(!file) return;
+  for(uint n = 0; n < count; n++) {
+    uint8 word[2] = {(uint8)(samples[n] & 0xff), (uint8)(samples[n] >> 8 & 0xff)};
+    fwrite(word, 1, 2, file);
+  }
+}
+
 auto DSP::registersForTrace() -> const uint8* {
   for(uint address : range(SPC_DSP::register_count)) {
     traceRegisters[address] = spc_dsp.read(address);
@@ -107,6 +126,14 @@ auto DSP::registersForTrace() -> const uint8* {
 
 auto DSP::echoWritesToAudioRam() const -> bool {
   return !configuration.hacks.dsp.echoShadow;
+}
+
+//Whether this chip is being run as the hardware runs it. The fast path does a
+//whole sample's thirty-two steps in one go, which is close enough to listen to
+//and not close enough to check against: a reimplementation cannot be in step
+//with something that does not keep the steps.
+auto DSP::runsStepByStep() const -> bool {
+  return !configuration.hacks.dsp.fast;
 }
 
 auto DSP::mute() -> bool {

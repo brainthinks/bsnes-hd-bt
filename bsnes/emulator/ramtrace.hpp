@@ -38,7 +38,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      5
+//   uint16 version      7
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -51,6 +51,7 @@
 //   uint8  initial_save[save_len]
 //   uint8  initial_apu[apu_len]
 //   uint8  initial_dsp[dsp_len]
+//   AudioSnapshot initial_audio   (absent when apu_len is 0)
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
 //     Registers regs    the machine when this record was taken
@@ -64,12 +65,28 @@
 //     per delta: uint32 offset, uint8 value
 //     uint32 dsp_delta_count    (absent when dsp_len is 0)
 //     per delta: uint32 offset, uint8 value
+//     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// Version 4 is the same without the two audio lengths, the two initial audio
-// blocks and the two per-frame audio sections; version 3 is version 4 without
-// save_len, initial_save and the per-frame save section; version 2 is version 3
-// without the two vram fields and the per-frame vram section. Readers accept
-// all four.
+// AudioSnapshot is forty bytes: pc as uint16, then a, x, y, sp, psw, the
+// control register, the DSP address, the four bytes each way through the
+// mailbox, the two spare bytes, and then each timer's divider, prescaler,
+// stage and output as three bytes apiece. One pad byte, and then the audio
+// processor's own cycle count as a uint64 -- how many of its cycles pass in a
+// video frame is a measurement rather than a ratio, because the two machines
+// run off separate crystals -- and last a uint16 saying how far into the echo
+// buffer the sound chip is writing, which lives inside the chip and appears
+// nowhere a driver could look, and a uint8 saying which of the sound chip's
+// thirty-two steps it is on, so a reimplementation starts its samples in step
+// rather than up to one sample out. Five pad bytes at the end.
+//
+// Version 6 is the same with a forty-byte snapshot carrying no echo offset.
+// Version 5 is the same without the audio snapshots -- it carried audio RAM and
+// the sound registers, which is enough to watch the driver and not enough to
+// continue it. Version 4 is version 5 without the two audio lengths, the two
+// initial audio blocks and the two per-frame audio sections; version 3 is
+// version 4 without save_len, initial_save and the per-frame save section;
+// version 2 is version 3 without the two vram fields and the per-frame vram
+// section. Readers accept all five.
 //
 // Registers is a,x,y,s,d as uint16 then db,p as uint8: twelve bytes. They are
 // needed because routines take their arguments in registers as often as in
@@ -89,6 +106,13 @@ struct Snapshot {
   uint8_t db = 0, p = 0;
 };
 
+// The audio processor when a record was taken arrives here already laid out,
+// as the thirty-two bytes described above: its RAM says what the sound driver
+// has done, and this says what it is about to do and what time it thinks it
+// is. SMP::snapshotForTrace fills it, which keeps the one place that knows
+// that processor's insides the one place that knows them.
+static constexpr unsigned AudioSnapshotBytes = 48;
+
 struct Recorder {
   auto active() const -> bool { return file != nullptr; }
 
@@ -97,16 +121,18 @@ struct Recorder {
   auto observe(const uint8_t* ram, unsigned length, const Snapshot& regs = {},
                const uint16_t* video = nullptr, const uint8_t* save = nullptr,
                unsigned saveSize = 0, const uint8_t* apu = nullptr,
-               const uint8_t* dspRegs = nullptr, bool audioIsHonest = true) -> void {
+               const uint8_t* dspRegs = nullptr, bool audioIsHonest = true,
+               const uint8_t* audioRegs = nullptr) -> void {
     if(!enabled(length)) return;
     if(!started) {
       started = true;
-      if(!open(length, ram, regs, video, save, saveSize, apu, dspRegs, audioIsHonest)) return;
+      if(!open(length, ram, regs, video, save, saveSize, apu, dspRegs, audioIsHonest,
+               audioRegs)) return;
       return;
     }
     if(!file) return;
     if(skip) { skip--; return; }
-    writeFrame(ram, regs, video, save, apu, dspRegs);
+    writeFrame(ram, regs, video, save, apu, dspRegs, audioRegs);
   }
 
   // One button, as the SNES gamepad enum orders them. Accumulated until the
@@ -157,7 +183,8 @@ private:
 
   auto open(unsigned length, const uint8_t* ram, const Snapshot& regs,
             const uint16_t* video, const uint8_t* save, unsigned saveSize,
-            const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest) -> bool {
+            const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest,
+            const uint8_t* audioRegs) -> bool {
     auto path = getenv("BSNES_TRACE_RAM");
     if(!path) return false;
     if(auto after = getenv("BSNES_TRACE_RAM_AFTER")) skip = (unsigned)atoi(after);
@@ -189,7 +216,8 @@ private:
     //something that cannot be checked.
     if(apu && dspRegs && getenv("BSNES_TRACE_APU")) {
       if(!audioIsHonest) {
-        fprintf(stderr, "BSNES_TRACE_APU: refusing, the echo buffer is shadowed\n");
+        fprintf(stderr, "BSNES_TRACE_APU: refusing, the sound chip is not being run"
+                        " as the hardware runs it\n");
       } else {
         apuLen = AudioBytes;
         dspLen = SoundRegisters;
@@ -203,7 +231,7 @@ private:
     }
 
     uint8_t header[42] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 5);
+    write16(header + 4, 7);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
@@ -217,6 +245,7 @@ private:
     if(saveLen) fwrite(saveShadow, 1, saveLen, file);
     if(apuLen) fwrite(apuShadow, 1, apuLen, file);
     if(dspLen) fwrite(dspShadow, 1, dspLen, file);
+    if(apuLen) writeAudioRegisters(audioRegs);
     atexit(closeAtExit);
     return true;
   }
@@ -231,7 +260,8 @@ private:
   }
 
   auto writeFrame(const uint8_t* ram, const Snapshot& regs, const uint16_t* video,
-                  const uint8_t* save, const uint8_t* apu, const uint8_t* dspRegs) -> void {
+                  const uint8_t* save, const uint8_t* apu, const uint8_t* dspRegs,
+                  const uint8_t* audioRegs) -> void {
     // count first, so the record can be written in one pass
     uint32_t changed = 0;
     for(unsigned n = 0; n < len; n++) changed += ram[n] != shadow[n];
@@ -254,8 +284,16 @@ private:
     if(saveLen) writeDeltas(save, saveShadow, saveLen);
     if(apuLen) writeDeltas(apu, apuShadow, apuLen);
     if(dspLen) writeDeltas(dspRegs, dspShadow, dspLen);
+    if(apuLen) writeAudioRegisters(audioRegs);
     frames++;
     input = 0;
+  }
+
+  //A record with no snapshot to give writes zeroes rather than skipping the
+  //section, because the header has already said the section is there.
+  auto writeAudioRegisters(const uint8_t* audioRegs) -> void {
+    uint8_t blank[AudioSnapshotBytes] = {};
+    fwrite(audioRegs ? audioRegs : blank, 1, AudioSnapshotBytes, file);
   }
 
   //One region's worth of changes: a count, then that many offset-and-value

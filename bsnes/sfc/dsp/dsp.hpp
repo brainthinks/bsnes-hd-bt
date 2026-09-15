@@ -23,6 +23,15 @@ struct DSP {
   //them means asking for them one at a time.
   auto registersForTrace() -> const uint8*;
 
+  //Where in the echo buffer the sound chip is writing, which lives inside the
+  //chip and appears nowhere a driver could look.
+  auto echoOffsetForTrace() const -> uint { return spc_dsp.echoOffsetForTrace(); }
+  auto phaseForTrace() const -> uint { return spc_dsp.phaseForTrace(); }
+
+  //BSNES_DUMP_SAMPLES, which writes this chip's output where a reimplementation
+  //of it can be compared against it one sample at a time.
+  auto dumpSamples(const int16* samples, uint count) -> void;
+
   //BSNES_DUMP_CONSOLE, which writes the console's own read-only tables out
   //once at power so a reimplementation can be given them rather than carry
   //them in its source.
@@ -32,6 +41,7 @@ struct DSP {
   //is written to a private copy instead of into audio RAM, so a recording made
   //that way would differ from the machine over whatever the echo covers.
   auto echoWritesToAudioRam() const -> bool;
+  auto runsStepByStep() const -> bool;
 
   auto serialize(serializer&) -> void;
 

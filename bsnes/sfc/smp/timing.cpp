@@ -46,6 +46,7 @@ auto SMP::stepIdle(uint clocks) -> void {
 }
 
 auto SMP::stepTimers(uint clocks) -> void {
+  traceClocks += clocks;
   timer0.step(clocks);
   timer1.step(clocks);
   timer2.step(clocks);

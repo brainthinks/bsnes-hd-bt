@@ -20,6 +20,18 @@ struct SMP : Processor::SPC700, Thread {
 
   uint8 iplrom[64];
 
+  //For BSNES_TRACE_APU. Fills the thirty-two byte snapshot the trace format
+  //describes: where this processor is, what it holds, and what its timers
+  //think the time is. Audio RAM alone says what the sound driver has done;
+  //this is what says what it is about to do.
+  auto snapshotForTrace(uint8* out) -> void;
+
+  //Clocks this processor has run, for BSNES_TRACE_APU. Two of them are one of
+  //its cycles. It is here because the two machines' crystals are independent:
+  //how many of these pass in a video frame is a measurement, not a ratio, and
+  //a reimplementation that assumed one would drift.
+  uint64 traceClocks = 0;
+
 private:
   struct IO {
     //timing

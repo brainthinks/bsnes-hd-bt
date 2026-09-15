@@ -237,6 +237,14 @@ private:
 
 public:
     bool mute() { return m.regs[r_flg] & 0x40; }
+    //For BSNES_TRACE_APU. How far into the echo buffer the next write goes.
+    //It is inside the chip and readable nowhere else, and without it a
+    //reimplementation started partway through a recording writes the right
+    //samples into the wrong part of the delay line.
+    int echoOffsetForTrace() const { return m.echo_offset; }
+    //Which of the thirty-two steps the chip is on. A sample comes out of the
+    //last of them, so this says how far through the current one it is.
+    int phaseForTrace() const { return m.phase; }
 };
 
 #include <assert.h>
