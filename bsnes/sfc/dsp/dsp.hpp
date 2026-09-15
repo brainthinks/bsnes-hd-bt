@@ -30,6 +30,16 @@ struct DSP {
   auto rateCounterForTrace() const -> uint { return spc_dsp.rateCounterForTrace(); }
   auto alternateForTrace() const -> uint { return spc_dsp.alternateForTrace(); }
   auto envelopeForTrace(uint v) const -> uint { return spc_dsp.envelopeForTrace(v); }
+  auto outputForTrace(uint v) const -> int { return spc_dsp.outputForTrace(v); }
+  auto interpForTrace(uint v) const -> int { return spc_dsp.interpForTrace(v); }
+  auto decodedForTrace(uint v, uint n) const -> int { return spc_dsp.decodedForTrace(v, n); }
+  auto decodedAtForTrace(uint v) const -> int { return spc_dsp.decodedAtForTrace(v); }
+  auto windowForTrace(uint v, uint n) const -> int { return spc_dsp.windowForTrace(v, n); }
+  auto mainOutForTrace(uint c) const -> int { return spc_dsp.traceMainOut[c]; }
+  auto echoInForTrace(uint c) const -> int { return spc_dsp.traceEchoIn[c]; }
+
+  //BSNES_DUMP_STAGES, which writes what the final sample was made of.
+  auto dumpStages() -> void;
   auto envelopePhaseForTrace(uint v) const -> uint { return spc_dsp.envelopePhaseForTrace(v); }
 
   //BSNES_DUMP_SAMPLES, which writes this chip's output where a reimplementation

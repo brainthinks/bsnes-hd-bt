@@ -30,6 +30,7 @@ auto DSP::main() -> void {
     //too coarse to find anything.
     if(!system.runAhead) dumpSamples(samplebuffer, count);
     if(!system.runAhead) dumpVoices();
+    if(!system.runAhead) dumpStages();
     spc_dsp.set_output(samplebuffer, 8192);
   }
 }
@@ -133,13 +134,53 @@ auto DSP::dumpVoices() -> void {
   //not: each voice's envelope to its full eleven bits and which of the four
   //phases it is in. Two implementations whose readable registers agree can
   //still be a few hundredths apart underneath, and this is where that shows.
-  uint8 row[32];
+  uint8 row[128];
   for(uint v : range(8)) {
     row[v] = spc_dsp.read(v * 0x10 + 8);
     row[8 + v] = spc_dsp.read(v * 0x10 + 9);
     uint env = spc_dsp.envelopeForTrace(v);
     row[16 + v * 2] = env & 0xff;
     row[17 + v * 2] = (env >> 8 & 0x07) | (spc_dsp.envelopePhaseForTrace(v) & 3) << 3;
+    //And the output at its full width, which the register above shows only the
+    //top eight bits of.
+    int out = spc_dsp.outputForTrace(v);
+    row[32 + v * 2] = out & 0xff;
+    row[33 + v * 2] = out >> 8 & 0xff;
+    //And where the voice is between two decoded samples.
+    int interp = spc_dsp.interpForTrace(v);
+    row[48 + v * 2] = interp & 0xff;
+    row[49 + v * 2] = interp >> 8 & 0xff;
+  }
+  //And the four samples each voice's curve is drawn through, which can be
+  //compared without agreeing about how the buffer is laid out.
+  for(uint v : range(8)) {
+    for(uint n : range(4)) {
+      int sample = spc_dsp.windowForTrace(v, n);
+      row[64 + v * 8 + n * 2] = sample & 0xff;
+      row[65 + v * 8 + n * 2] = sample >> 8 & 0xff;
+    }
+  }
+  fwrite(row, 1, sizeof(row), file);
+}
+
+//BSNES_DUMP_STAGES: the voice sum before the master volume and the echo after
+//its filter, left then right, as signed sixteen bit words.
+auto DSP::dumpStages() -> void {
+  static FILE* file = nullptr;
+  static bool tried = false;
+  if(!tried) {
+    tried = true;
+    if(auto path = getenv("BSNES_DUMP_STAGES")) file = fopen(path, "wb");
+  }
+  if(!file) return;
+  uint8 row[8];
+  for(uint c : range(2)) {
+    int main = spc_dsp.traceMainOut[c];
+    int echo = spc_dsp.traceEchoIn[c];
+    row[c * 2] = main & 0xff;
+    row[c * 2 + 1] = main >> 8 & 0xff;
+    row[4 + c * 2] = echo & 0xff;
+    row[5 + c * 2] = echo >> 8 & 0xff;
   }
   fwrite(row, 1, sizeof(row), file);
 }

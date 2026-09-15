@@ -487,6 +487,9 @@ VOICE_CLOCK( V3c )
 		
 		// Apply envelope
 		m.t_output = (output * v->env) >> 11 & ~1;
+		//For BSNES_DUMP_VOICES. The register a driver reads is this shifted
+		//down eight, which is not enough to tell two implementations apart.
+		traceOutput[v - m.voices] = m.t_output;
 		v->t_envx_out = (uint8_t) (v->env >> 4);
 	}
 	
@@ -687,6 +690,12 @@ ECHO_CLOCK( 25 )
 }
 inline int SPC_DSP::echo_output( int ch )
 {
+	//For BSNES_DUMP_STAGES: the voice sum before the master volume, and the
+	//echo after its filter. Everything the final sample is made of, so a
+	//reimplementation that agrees about the voices and not about the sample
+	//can be told which of the two stages it is losing.
+	traceMainOut [ch] = m.t_main_out [ch];
+	traceEchoIn  [ch] = m.t_echo_in [ch];
 	int out = (int16_t) ((m.t_main_out [ch] * (int8_t) REG(mvoll + ch * 0x10)) >> 7) +
 			(int16_t) ((m.t_echo_in [ch] * (int8_t) REG(evoll + ch * 0x10)) >> 7);
 	CLAMP16( out );

@@ -256,6 +256,28 @@ public:
     //the first and none of the second, which is not enough to say why two
     //implementations of this chip are producing different numbers.
     int envelopeForTrace(int v) const { return m.voices[v].env; }
+    //A voice's output at its full width, before the volumes. Recorded as it is
+    //produced, because the pipeline moves on.
+    int outputForTrace(int v) const { return traceOutput[v]; }
+    //Where a voice is between two decoded samples: the low twelve bits are the
+    //fraction the interpolation curve is read at, and the rest says which of
+    //the decoded samples the four taps start on.
+    int interpForTrace(int v) const { return m.voices[v].interp_pos; }
+    //The decoded samples a voice's curve is drawn through, and where in them
+    //the next four are written. Twelve of them, held as a doubled buffer so a
+    //window can straddle the end without wrapping.
+    int decodedForTrace(int v, int n) const { return m.voices[v].buf[n]; }
+    int decodedAtForTrace(int v) const { return m.voices[v].buf_pos; }
+    //The four the curve is actually drawn through, in the order the taps take
+    //them. Comparing these needs no agreement about how the buffer is laid
+    //out, only about which four samples come out of it.
+    int windowForTrace(int v, int n) const {
+      voice_t const* voice = &m.voices[v];
+      return voice->buf[voice->buf_pos + (voice->interp_pos >> 12) + n];
+    }
+    int traceOutput [voice_count] = {};
+    int traceMainOut [2] = {};
+    int traceEchoIn [2] = {};
     int envelopePhaseForTrace(int v) const { return m.voices[v].env_mode; }
 };
 
