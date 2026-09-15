@@ -245,6 +245,12 @@ public:
     //Which of the thirty-two steps the chip is on. A sample comes out of the
     //last of them, so this says how far through the current one it is.
     int phaseForTrace() const { return m.phase; }
+    //The counter every envelope rate is measured against, which runs down over
+    //a range of 30720, and the toggle that makes the chip attend to key on
+    //every other sample. Both decide *when* things happen rather than what,
+    //and neither can be seen from outside the chip.
+    int rateCounterForTrace() const { return m.counter; }
+    int alternateForTrace() const { return m.every_other_sample; }
 };
 
 #include <assert.h>

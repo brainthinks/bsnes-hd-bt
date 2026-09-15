@@ -29,6 +29,7 @@ auto DSP::main() -> void {
     //sample by sample rather than once a frame, which is five hundred samples
     //too coarse to find anything.
     if(!system.runAhead) dumpSamples(samplebuffer, count);
+    if(!system.runAhead) dumpVoices();
     spc_dsp.set_output(samplebuffer, 8192);
   }
 }
@@ -115,6 +116,25 @@ auto DSP::dumpSamples(const int16* samples, uint count) -> void {
     uint8 word[2] = {(uint8)(samples[n] & 0xff), (uint8)(samples[n] >> 8 & 0xff)};
     fwrite(word, 1, 2, file);
   }
+}
+
+//BSNES_DUMP_VOICES: each voice's envelope and its own output, per sample.
+//Sixteen bytes a sample, which is what separates a wrong envelope from a wrong
+//waveform: the two look the same in the mix and nothing else tells them apart.
+auto DSP::dumpVoices() -> void {
+  static FILE* file = nullptr;
+  static bool tried = false;
+  if(!tried) {
+    tried = true;
+    if(auto path = getenv("BSNES_DUMP_VOICES")) file = fopen(path, "wb");
+  }
+  if(!file) return;
+  uint8 row[16];
+  for(uint v : range(8)) {
+    row[v] = spc_dsp.read(v * 0x10 + 8);
+    row[8 + v] = spc_dsp.read(v * 0x10 + 9);
+  }
+  fwrite(row, 1, sizeof(row), file);
 }
 
 auto DSP::registersForTrace() -> const uint8* {

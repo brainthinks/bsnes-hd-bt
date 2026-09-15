@@ -27,10 +27,16 @@ struct DSP {
   //chip and appears nowhere a driver could look.
   auto echoOffsetForTrace() const -> uint { return spc_dsp.echoOffsetForTrace(); }
   auto phaseForTrace() const -> uint { return spc_dsp.phaseForTrace(); }
+  auto rateCounterForTrace() const -> uint { return spc_dsp.rateCounterForTrace(); }
+  auto alternateForTrace() const -> uint { return spc_dsp.alternateForTrace(); }
 
   //BSNES_DUMP_SAMPLES, which writes this chip's output where a reimplementation
   //of it can be compared against it one sample at a time.
   auto dumpSamples(const int16* samples, uint count) -> void;
+
+  //BSNES_DUMP_VOICES, which writes each voice's envelope and output once a
+  //sample, so a wrong envelope can be told from a wrong waveform.
+  auto dumpVoices() -> void;
 
   //BSNES_DUMP_CONSOLE, which writes the console's own read-only tables out
   //once at power so a reimplementation can be given them rather than carry

@@ -69,6 +69,10 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   out[40] = echoOffset & 0xff;
   out[41] = echoOffset >> 8 & 0xff;
   out[42] = dsp.phaseForTrace() & 0x1f;
+  uint rateCounter = dsp.rateCounterForTrace();
+  out[43] = rateCounter & 0xff;
+  out[44] = rateCounter >> 8 & 0xff;
+  out[45] = dsp.alternateForTrace() & 1;
 }
 
 auto SMP::power(bool reset) -> void {

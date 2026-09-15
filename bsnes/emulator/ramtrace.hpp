@@ -38,7 +38,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      7
+//   uint16 version      8
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -77,8 +77,18 @@
 // buffer the sound chip is writing, which lives inside the chip and appears
 // nowhere a driver could look, and a uint8 saying which of the sound chip's
 // thirty-two steps it is on, so a reimplementation starts its samples in step
-// rather than up to one sample out. Five pad bytes at the end.
+// rather than up to one sample out; then a uint16 for the counter every
+// envelope rate is measured against, which runs down over a range of 30720,
+// and a uint8 for the toggle that makes the chip attend to key on every other
+// sample. Those last two decide when things happen rather than what, and a
+// reimplementation without them has every envelope falling a few samples early
+// or late and every note starting on the wrong one of two samples. Two pad
+// bytes at the end.
 //
+// Version 7 is the same with a snapshot carrying no rate counter and no
+// alternate-sample toggle -- the same forty-eight bytes, with those three
+// reading as nought, which is why the version and not the length says whether
+// they are there.
 // Version 6 is the same with a forty-byte snapshot carrying no echo offset.
 // Version 5 is the same without the audio snapshots -- it carried audio RAM and
 // the sound registers, which is enough to watch the driver and not enough to
@@ -231,7 +241,7 @@ private:
     }
 
     uint8_t header[42] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 7);
+    write16(header + 4, 8);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
