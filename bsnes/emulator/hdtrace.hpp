@@ -197,4 +197,7 @@ namespace HdTrace {
     return inList(getenv("BSNES_FRAME_AT"), f);
   }
 
+  //BSNES_FRAME_HASHES=<path> is the stream form of the same pictures: 32 bytes
+  //a frame, written from PPU::refresh in ppu-fast. Not gated on FRAME_AT.
+
 }

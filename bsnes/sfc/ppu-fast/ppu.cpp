@@ -210,6 +210,41 @@ auto PPU::refresh() -> void {
       }
     }
 
+    //BSNES_FRAME_HASHES=<path>: 32 bytes a frame, SHA-256 of the same 256 by
+    //224 RGB the PPM dump writes (8-row overscan crop, 5-bit channels widened
+    //the same way). A stream, so a 20k-frame run is 640 KiB instead of a
+    //directory of pictures. Compared against FZERO_FRAME_HASHES.
+    if(auto hashes = getenv("BSNES_FRAME_HASHES")) {
+      if(!hd() && width == 256 && height == 240) {
+        static FILE* fp = nullptr;
+        static bool failed = false;
+        if(!fp && !failed) {
+          fp = fopen(hashes, "wb");
+          if(!fp) {
+            failed = true;
+            fprintf(stderr, "BSNES_FRAME_HASHES: cannot write %s\n", hashes);
+          }
+        }
+        if(fp) {
+          Hash::SHA256 sha;
+          auto src = output + 8 * pitch;
+          for(uint row : range(224)) {
+            for(uint col : range(256)) {
+              uint16 c = src[col];
+              uint r = c >> 10 & 31, g = c >>  5 & 31, b = c >>  0 & 31;
+              sha.input((uint8_t)(r << 3 | r >> 2));
+              sha.input((uint8_t)(g << 3 | g >> 2));
+              sha.input((uint8_t)(b << 3 | b >> 2));
+            }
+            src += pitch;
+          }
+          auto digest = sha.output();
+          fwrite(digest.data(), 1, digest.size(), fp);
+          fflush(fp);
+        }
+      }
+    }
+
     frame.pitch  = pitch;
     frame.width  = width;
     frame.height = height;
