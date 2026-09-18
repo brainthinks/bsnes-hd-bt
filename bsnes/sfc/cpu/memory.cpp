@@ -58,6 +58,11 @@ auto CPU::write(uint address, uint8 data) -> void {
   //to find the routine behind a buffer when porting; inert unless set.
   if(RamTrace::watching()) RamTrace::watchWrite(address, r.pc.d);
 
+  //BSNES_TRACE_REGS=1: shadow the display and transfer registers off the game's
+  //own stores, so a recording carries a domain nothing can read back. Inert
+  //unless set.
+  if(RamTrace::tracingRegisters()) RamTrace::noteRegisterWrite(address, data);
+
   if(address & 0x408000) {
     if(address & 0x800000 && io.fastROM) {
       status.clockCount = 6;

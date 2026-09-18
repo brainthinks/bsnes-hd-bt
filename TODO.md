@@ -42,6 +42,10 @@ not proof that all state workflows are compatible.
 - [ ] Check representative coprocessor games and reject incompatible/corrupt
   states cleanly. Accurate's distinct state format is not a promise of HD/Fast
   interchangeability; preserve its behavior and handle mismatches explicitly.
+- [ ] Fail cleanly when a `.bst`/`.bsz` archive cannot be created, replaced, or
+  read. A denied archive write currently crashes the headless save-at-frame
+  path instead of reporting an I/O error; cover read-only and unwritable save
+  directories in the state regression tests.
 - [ ] Add focused regression coverage for shared layout, legacy state import,
   cross-renderer restoration, and continued execution after load.
 

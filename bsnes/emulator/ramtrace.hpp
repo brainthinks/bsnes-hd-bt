@@ -36,9 +36,21 @@
 // the echo-shadow hack is on rather than writing a recording that differs from
 // the machine.
 //
+// BSNES_TRACE_REGS=1 does the same for the display and transfer registers -
+// $2100-$21FF and $4200-$43FF - snooped off the CPU's own stores. They cannot
+// be read back out of the machine, most of them being write-only, so a shadow
+// of what was written is the only form this domain has; it is also exactly the
+// claim a port can be held to, because the port writes them too. Nothing in
+// the game reads them back either, which is why a comparison of work RAM can
+// be perfect while the picture is wrong: a wrong tilemap base is invisible to
+// every other domain the recorder carries.
+//
+// Off by default, and cheap when on: 768 bytes of shadow, delta-encoded, and a
+// racing frame changes a couple of dozen of them.
+//
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      8
+//   uint16 version      9
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -46,11 +58,13 @@
 //   uint32 save_len     the cartridge's battery RAM, or 0 when not recorded
 //   uint32 apu_len      0x10000, or 0 when audio RAM was not recorded
 //   uint32 dsp_len      128, or 0 when the sound registers were not recorded
+//   uint32 regs_len     0x300, or 0 when the registers were not recorded
 //   uint8  initial[ram_len]
 //   uint8  initial_vram[vram_len]
 //   uint8  initial_save[save_len]
 //   uint8  initial_apu[apu_len]
 //   uint8  initial_dsp[dsp_len]
+//   uint8  initial_regs[regs_len]
 //   AudioSnapshot initial_audio   (absent when apu_len is 0)
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
@@ -64,6 +78,8 @@
 //     uint32 apu_delta_count    (absent when apu_len is 0)
 //     per delta: uint32 offset, uint8 value
 //     uint32 dsp_delta_count    (absent when dsp_len is 0)
+//     per delta: uint32 offset, uint8 value
+//     uint32 regs_delta_count   (absent when regs_len is 0)
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
@@ -85,6 +101,8 @@
 // or late and every note starting on the wrong one of two samples. Two pad
 // bytes at the end.
 //
+// Version 8 is the same without regs_len, initial_regs and the per-frame
+// register section.
 // Version 7 is the same with a snapshot carrying no rate counter and no
 // alternate-sample toggle -- the same forty-eight bytes, with those three
 // reading as nought, which is why the version and not the length says whether
@@ -122,6 +140,53 @@ struct Snapshot {
 // is. SMP::snapshotForTrace fills it, which keeps the one place that knows
 // that processor's insides the one place that knows them.
 static constexpr unsigned AudioSnapshotBytes = 48;
+
+// The display and transfer registers, as the game last left them.
+//
+// $2100-$21FF then $4200-$43FF, laid out the way the port lays them out so the
+// two can be diffed offset for offset. There is nothing to read them out of:
+// the PPU's registers are write-only on the real machine and the emulator's
+// internal state is its own business, so this shadows the CPU's stores and
+// that shadow *is* the domain.
+//
+// Deliberately not DMA or HDMA. Those are the same hardware writing the same
+// addresses, but a channel walking a table down the screen leaves a register
+// holding whatever the last line wanted, which says nothing about the frame
+// and would differ between two correct implementations. What a port is
+// answerable for here is the stores its own ported code performs, and a
+// channel's table is a separate thing already carried in work RAM.
+struct RegisterFile {
+  static constexpr unsigned Bytes = 0x300;
+
+  auto enabled() -> bool {
+    if(state < 0) state = getenv("BSNES_TRACE_REGS") ? 1 : 0;
+    return state == 1;
+  }
+
+  // The register blocks are mirrored into banks $00-$3F and $80-$BF; banks
+  // $40-$7F and $C0-$FF reach cartridge or work RAM at the same offsets and
+  // must not be folded in with them.
+  auto note(unsigned address, uint8_t value) -> void {
+    unsigned bank = address >> 16 & 0xff, within = address & 0xffff;
+    if(bank >= 0x40 && bank < 0x80) return;
+    if(bank >= 0xc0) return;
+    if(within >= 0x2100 && within <= 0x21ff) bytes[within - 0x2100] = value;
+    else if(within >= 0x4200 && within <= 0x43ff) bytes[0x100 + within - 0x4200] = value;
+  }
+
+  uint8_t bytes[Bytes] = {};
+  int state = -1;
+};
+
+inline auto registerFile() -> RegisterFile& {
+  static RegisterFile file;
+  return file;
+}
+
+inline auto tracingRegisters() -> bool { return registerFile().enabled(); }
+inline auto noteRegisterWrite(unsigned address, uint8_t value) -> void {
+  registerFile().note(address, value);
+}
 
 struct Recorder {
   auto active() const -> bool { return file != nullptr; }
@@ -169,6 +234,8 @@ struct Recorder {
     apuShadow = nullptr;
     delete[] dspShadow;
     dspShadow = nullptr;
+    delete[] regsShadow;
+    regsShadow = nullptr;
   }
 
 private:
@@ -240,8 +307,17 @@ private:
       memcpy(dspShadow, dspRegs, dspLen);
     }
 
-    uint8_t header[42] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 8);
+    //And the display and transfer registers, which need nothing from the
+    //caller: the shadow has been filling itself from the CPU's stores since
+    //the machine was turned on.
+    if(registerFile().enabled()) regsLen = RegisterFile::Bytes;
+    if(regsLen) {
+      regsShadow = new uint8_t[regsLen];
+      memcpy(regsShadow, registerFile().bytes, regsLen);
+    }
+
+    uint8_t header[46] = {'F', 'Z', 'T', 'R'};
+    write16(header + 4, 9);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
@@ -249,12 +325,14 @@ private:
     write32(header + 30, saveLen);
     write32(header + 34, apuLen);
     write32(header + 38, dspLen);
+    write32(header + 42, regsLen);
     fwrite(header, 1, sizeof(header), file);
     fwrite(ram, 1, len, file);
     if(videoLen) fwrite(videoShadow, 1, videoLen, file);
     if(saveLen) fwrite(saveShadow, 1, saveLen, file);
     if(apuLen) fwrite(apuShadow, 1, apuLen, file);
     if(dspLen) fwrite(dspShadow, 1, dspLen, file);
+    if(regsLen) fwrite(regsShadow, 1, regsLen, file);
     if(apuLen) writeAudioRegisters(audioRegs);
     atexit(closeAtExit);
     return true;
@@ -294,6 +372,7 @@ private:
     if(saveLen) writeDeltas(save, saveShadow, saveLen);
     if(apuLen) writeDeltas(apu, apuShadow, apuLen);
     if(dspLen) writeDeltas(dspRegs, dspShadow, dspLen);
+    if(regsLen) writeDeltas(registerFile().bytes, regsShadow, regsLen);
     if(apuLen) writeAudioRegisters(audioRegs);
     frames++;
     input = 0;
@@ -370,6 +449,8 @@ private:
   unsigned apuLen = 0;
   uint8_t* dspShadow = nullptr;
   unsigned dspLen = 0;
+  uint8_t* regsShadow = nullptr;
+  unsigned regsLen = 0;
   unsigned len = 0;
   uint32_t frames = 0;
   unsigned input = 0;
@@ -678,6 +759,54 @@ inline auto watching() -> bool { return watch().enabled(); }
 inline auto watchWrite(unsigned address, unsigned pc) -> void { watch().note(address, pc); }
 inline auto watchingReads() -> bool { return readWatch().enabled("BSNES_WATCH_READ", true); }
 inline auto watchRead(unsigned address, unsigned pc) -> void { readWatch().note(address, pc); }
+
+// Optional main-CPU timing sidecar; no change to the RAM trace format.
+// BSNES_TRACE_TIMING=<csv> BSNES_TRACE_TIMING_AT=0089d5,0088ff,...
+// Requires ordinary frame-based BSNES_TRACE_RAM so the frame labels agree
+// with screenshots. master_clock is the wrapping 32-bit CPU master counter.
+struct TimingTrace {
+  auto enabled() -> bool {
+    if(state >= 0) return state == 1;
+    state = 0;
+    auto path = getenv("BSNES_TRACE_TIMING");
+    if(!path) return false;
+    auto list = getenv("BSNES_TRACE_TIMING_AT");
+    if(!list || !*list || !getenv("BSNES_TRACE_RAM") || getenv("BSNES_TRACE_RAM_AT")) {
+      fprintf(stderr, "[timing] requires BSNES_TRACE_TIMING_AT and frame-based BSNES_TRACE_RAM\n");
+      exit(2);
+    }
+    while(*list) {
+      char* end = nullptr;
+      auto pc = strtoul(list, &end, 16);
+      if(end == list || pc > 0xffffff || count == 128 || (*end && *end != ',')) {
+        fprintf(stderr, "[timing] invalid address list\n");
+        exit(2);
+      }
+      addresses[count++] = pc;
+      if(!*end) break;
+      list = end + 1;
+      if(!*list) { fprintf(stderr, "[timing] empty final address\n"); exit(2); }
+    }
+    file = fopen(path, "w");
+    if(!file) { fprintf(stderr, "[timing] cannot open output\n"); exit(2); }
+    fprintf(file, "frame,master_clock,scanline,hclock,pc\n");
+    state = 1;
+    return true;
+  }
+  auto note(unsigned pc, unsigned clocks, unsigned line, unsigned horizontal) -> void {
+    for(unsigned i = 0; i < count; i++) if(addresses[i] == pc) {
+      fprintf(file, "%u,%u,%u,%u,%06x\n", recorder().recordedFrames(), clocks, line, horizontal, pc);
+      fflush(file);
+      return;
+    }
+  }
+  ~TimingTrace() { if(file) fclose(file); }
+private:
+  FILE* file = nullptr;
+  int state = -1;
+  unsigned addresses[128] = {}, count = 0;
+};
+inline auto timingTrace() -> TimingTrace& { static TimingTrace trace; return trace; }
 
 // BSNES_WATCH_READS_BY=039243-039488: what a stretch of code reads.
 inline auto inputWatch() -> WriteWatch& {

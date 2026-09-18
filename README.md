@@ -99,3 +99,16 @@ Preview
 ![bsnes user interface](.assets/user-interface.png)
 ![bsnes running Bahamut Lagoon](.assets/bahamut-lagoon.png)
 ![bsnes running Tengai Makyou Zero](.assets/tengai-makyou-zero.png)
+
+### Optional recorder timing diagnostics
+
+On the `fzero-trace-recorder` branch, `BSNES_TRACE_TIMING=<csv>` with
+`BSNES_TRACE_TIMING_AT=0089d5,0088ff` records selected CPU instruction entries
+as `frame,master_clock,scanline,hclock,pc`. It requires ordinary frame-based
+`BSNES_TRACE_RAM`; routine-triggered snapshots are rejected because their
+labels are not video frames. The master counter wraps at 32 bits, so use
+unsigned subtraction for intervals shorter than one wrap and do not load a
+save inside a measured interval. The log is inert when the option is unset.
+No trace format or emulation behavior is changed. Reproducible setup recipes
+and duplicate-log validation live in fzero-rs `docs/pixel-accuracy.md` and
+`tools/pixel_check.py --timing-at`.
