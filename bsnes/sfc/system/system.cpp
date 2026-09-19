@@ -113,6 +113,9 @@ auto System::frameEvent() -> void {
   //record work RAM for verifying a reimplementation; inert unless enabled.
   //BSNES_TRACE_RAM_AT moves the snapshot to a routine's entry instead, and the
   //two must not both fire or the records would interleave
+  //BSNES_POKE: forge work RAM once, before the record of that frame is written,
+  //so the recording's first record already holds the forged state.
+  RamTrace::poke().applyIfDue(RamTrace::recorder().recordedFrames(), cpu.wram);
   if(!RamTrace::snapshotting()) {
     uint8 audioRegs[RamTrace::AudioSnapshotBytes];
     smp.snapshotForTrace(audioRegs);

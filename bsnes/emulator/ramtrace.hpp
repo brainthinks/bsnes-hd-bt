@@ -674,6 +674,79 @@ inline auto recorder() -> Recorder&;   //defined below; it owns the frame count
 //byte for byte, and a handful in the middle cannot be, because the machine did
 //not finish them inside a video frame. Told which ranges were compared, the
 //recorder writes a map of exactly those.
+// BSNES_POKE=<bus>:<byte>[,<bus>:<byte>...] (hexadecimal): write these bytes
+// into work RAM once, at the frame BSNES_POKE_AT names (default 0: before the
+// first record of the recording is written, i.e. straight after the state
+// BSNES_LOAD_STATE loaded). This is the forged-state instrument fzero-rs's
+// queue asked for from its first day (docs/operating-procedure.md §2, kind 2;
+// §7.4): a routine's arm that no play route reaches is held to the machine by
+// setting its gate variable and bracketing the routine, and the port replays
+// from the same forged state. A recording made with a poke is labelled forged
+// by whoever writes its sidecar; nothing here is inferred about the game.
+// Only banks $7E/$7F (and their mirrors below $2000) are pokeable: the poke
+// exists to forge a *state*, never to alter the cartridge.
+struct Poke {
+  struct Write { unsigned address; uint8_t value; };
+  Write writes[64];
+  unsigned count = 0;
+  int state = -1;      // -1 unread, 0 off, 1 armed, 2 done
+  unsigned at = 0;
+
+  auto enabled() -> bool {
+    if(state >= 0) return state == 1;
+    state = 0;
+    auto list = getenv("BSNES_POKE");
+    if(!list || !*list) return false;
+    if(auto text = getenv("BSNES_POKE_AT")) at = (unsigned)strtoul(text, nullptr, 10);
+    while(*list) {
+      char* end = nullptr;
+      auto address = strtoul(list, &end, 16);
+      if(end == list || *end != ':' || address > 0xffffff || count == 64) {
+        fprintf(stderr, "[poke] invalid BSNES_POKE list\n");
+        exit(2);
+      }
+      char* after = nullptr;
+      auto value = strtoul(end + 1, &after, 16);
+      if(after == end + 1 || value > 0xff || (*after && *after != ',')) {
+        fprintf(stderr, "[poke] invalid BSNES_POKE list\n");
+        exit(2);
+      }
+      auto bank = address >> 16, within = address & 0xffff;
+      bool wram = bank == 0x7e || bank == 0x7f
+               || ((bank < 0x40 || (bank >= 0x80 && bank < 0xc0)) && within < 0x2000);
+      if(!wram) {
+        fprintf(stderr, "[poke] %06lx is not work RAM; a poke forges a state, never the cartridge\n", address);
+        exit(2);
+      }
+      writes[count++] = {(unsigned)address, (uint8_t)value};
+      if(!*after) break;
+      list = after + 1;
+      if(!*list) { fprintf(stderr, "[poke] empty final poke\n"); exit(2); }
+    }
+    state = 1;
+    return true;
+  }
+
+  // Apply once, at the named frame, into the CPU's work RAM (bank $7E/$7F
+  // offsets; the mirrors below $2000 map to $7E:0000..$7E:1FFF).
+  auto applyIfDue(unsigned frame, uint8_t* wram) -> void {
+    if(!enabled() || state != 1 || frame != at) return;
+    for(unsigned i = 0; i < count; i++) {
+      auto address = writes[i].address;
+      auto bank = address >> 16, within = address & 0xffff;
+      unsigned offset = (bank == 0x7e || bank == 0x7f) ? ((bank - 0x7e) << 16) | within : within;
+      wram[offset & 0x1ffff] = writes[i].value;
+    }
+    fprintf(stderr, "[poke] %u bytes forged into work RAM at frame %u\n", count, frame);
+    state = 2;
+  }
+};
+
+inline auto poke() -> Poke& {
+  static Poke p;
+  return p;
+}
+
 inline auto coverageWanted(unsigned frame) -> bool {
   static int parsed = -1;
   static unsigned low[256], high[256], count = 0;
