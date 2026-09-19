@@ -35,26 +35,34 @@ auto CPU::Enter() -> void {
 auto CPU::main() -> void {
   if(r.wai) return instructionWait();
   if(r.stp) return instructionStop();
-  //BSNES_TRACE_EXEC: here the PC is an instruction start and the flags are the
-  //widths it runs with, which is exactly what a disassembler cannot infer
-  if(RamTrace::tracingExec()) RamTrace::noteExec(r.pc.d, r.p.m, r.p.x);
-  //BSNES_TRACE_RAM_AT: snapshot RAM as a routine finds it, which is the only
-  //way to capture inputs that later code in the same frame overwrites
-  if(RamTrace::snapshotting() && RamTrace::atEntry(r.pc.d)) {
-    //registers as well as RAM: a routine's arguments are as often in X as in
-    //memory, and the car routines are indexed by it
-    RamTrace::Snapshot regs;
-    regs.a = r.a.w; regs.x = r.x.w; regs.y = r.y.w;
-    regs.s = r.s.w; regs.d = r.d.w; regs.db = r.b; regs.p = r.p;
-    uint8 audioRegs[RamTrace::AudioSnapshotBytes];
-    smp.snapshotForTrace(audioRegs);
-    RamTrace::recorder().observe(wram, sizeof(wram), regs, ppu.vramForTrace(),
-                                 cartridge.ram.data(), cartridge.ram.size(),
-                                 dsp.apuramForTrace(), dsp.registersForTrace(),
-                                 dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
-                                 audioRegs);
+  //An interrupt pending here is taken instead of this instruction, and the
+  //same PC comes round again after the rti. Noted out here, an entry was
+  //snapshotted twice on a one-in-two-thousand coincidence of scanline and
+  //PC, and a paired bracket died on its own duplicate ("repeated entry
+  //before paired exit"), truncating the recording. So note an instruction
+  //only when it is the one about to execute.
+  if(!status.interruptPending) {
+    //BSNES_TRACE_EXEC: here the PC is an instruction start and the flags are the
+    //widths it runs with, which is exactly what a disassembler cannot infer
+    if(RamTrace::tracingExec()) RamTrace::noteExec(r.pc.d, r.p.m, r.p.x);
+    //BSNES_TRACE_RAM_AT: snapshot RAM as a routine finds it, which is the only
+    //way to capture inputs that later code in the same frame overwrites
+    if(RamTrace::snapshotting() && RamTrace::atEntry(r.pc.d)) {
+      //registers as well as RAM: a routine's arguments are as often in X as in
+      //memory, and the car routines are indexed by it
+      RamTrace::Snapshot regs;
+      regs.a = r.a.w; regs.x = r.x.w; regs.y = r.y.w;
+      regs.s = r.s.w; regs.d = r.d.w; regs.db = r.b; regs.p = r.p;
+      uint8 audioRegs[RamTrace::AudioSnapshotBytes];
+      smp.snapshotForTrace(audioRegs);
+      RamTrace::recorder().observe(wram, sizeof(wram), regs, ppu.vramForTrace(),
+                                   cartridge.ram.data(), cartridge.ram.size(),
+                                   dsp.apuramForTrace(), dsp.registersForTrace(),
+                                   dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
+                                   audioRegs);
+    }
+    return instruction();
   }
-  if(!status.interruptPending) return instruction();
 
   if(status.nmiPending) {
     status.nmiPending = 0;
