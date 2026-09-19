@@ -50,7 +50,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      10
+//   uint16 version      11
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -83,7 +83,7 @@
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// AudioSnapshot is forty-nine bytes: pc as uint16, then a, x, y, sp, psw, the
+// AudioSnapshot is fifty bytes: pc as uint16, then a, x, y, sp, psw, the
 // control register, the DSP address, the four bytes each way through the
 // mailbox, the two spare bytes, and then each timer's divider, prescaler,
 // stage and output as three bytes apiece. One pad byte, and then the audio
@@ -108,7 +108,25 @@
 // reimplementation can only compare its registers on the frames where its own
 // instruction boundary happened to land on the recorded count.
 //
-// Version 9 is the same with a forty-eight byte snapshot carrying no
+// And last a uint8 carrying the clock each timer's prescaler byte dropped:
+// bit 0 is timer 0's, bit 1 timer 1's, bit 2 timer 2's, and bits 3-7 are
+// nought. The prescalers above count this processor's *cycles*, because that
+// is the unit a reimplementation counts in, but the hardware divider in front
+// of each timer counts *clocks* and there are two of them to a cycle -- so
+// `stage1 * 64 + (stage0 >> 1)` throws away `stage0 & 1`, and a divider
+// restored from it stands between nought and half a cycle behind the one the
+// machine had. A processor that counts whole cycles cannot stand on half of
+// one; this byte is which side of the half it was on, so that a
+// reimplementation can place the divider from the record instead of from a
+// constant chosen because it scores well. The bit is set when the machine's
+// divider was the odd clock -- half a cycle *further on* than the halved
+// prescaler says.
+//
+// Version 10 is the same with a forty-nine byte snapshot carrying no dropped
+// clocks, so a divider restored from one of its records is behind the
+// machine's by half a cycle as often as not, and nothing in the file says
+// which records those are.
+// Version 9 is version 10 with a forty-eight byte snapshot carrying no
 // instruction phase -- and with three pad bytes, at 31, 46 and 47, that were
 // never assigned before they were written, so a version 9 recording's are
 // whatever the recorder's stack held.
@@ -150,7 +168,7 @@ struct Snapshot {
 // has done, and this says what it is about to do and what time it thinks it
 // is. SMP::snapshotForTrace fills it, which keeps the one place that knows
 // that processor's insides the one place that knows them.
-static constexpr unsigned AudioSnapshotBytes = 49;
+static constexpr unsigned AudioSnapshotBytes = 50;
 
 // The display and transfer registers, as the game last left them.
 //
@@ -328,7 +346,7 @@ private:
     }
 
     uint8_t header[46] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 10);
+    write16(header + 4, 11);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);

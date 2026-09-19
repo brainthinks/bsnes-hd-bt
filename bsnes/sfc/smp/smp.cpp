@@ -104,6 +104,29 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   //saturated byte says "do not believe me" where a wrapped one lies.
   uint64 spent = (traceClocks >> 1) - (traceInstructionClocks >> 1);
   out[48] = spent > 255 ? 255 : spent;
+  //The clock the three prescaler bytes above threw away: bit 0 is timer 0's,
+  //bit 1 timer 1's, bit 2 timer 2's.
+  //
+  //Each timer's divider is stage0, a counter of *clocks* running modulo this
+  //timer's Frequency (128 for timers 0 and 1, 16 for timer 2), with stage1 a
+  //toggle above it -- so the whole phase is `stage1 * Frequency + stage0`
+  //clocks. Two clocks are one of this processor's cycles and the trace carries
+  //the phase in cycles, which is the unit a reimplementation counts in, so
+  //out[22..24] halve it and `stage0 & 1` goes nowhere. That is half a cycle,
+  //and it is not noise: the snapshot is always taken inside a mailbox access
+  //(see out[48]), so the instant is a fixed point of that access and the
+  //dropped clock is the same clock every frame rather than a coin toss.
+  //Without this byte a reimplementation restoring the divider is between
+  //nought and half a cycle behind the machine for the rest of the run, and the
+  //only way to ask what the other half said was to hand the dividers a cycle
+  //and see whether the score went up -- which is fitting a constant, not
+  //reading a record.
+  //
+  //Set means the machine's divider stood on the odd clock: half a cycle
+  //further on than the halved prescaler beside it says.
+  out[49] = (timer0.stage0 & 1) << 0
+          | (timer1.stage0 & 1) << 1
+          | (timer2.stage0 & 1) << 2;
 }
 
 auto SMP::power(bool reset) -> void {
