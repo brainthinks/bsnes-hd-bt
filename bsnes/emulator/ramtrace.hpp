@@ -727,9 +727,17 @@ struct Poke {
     return true;
   }
 
-  // Apply once, at the named frame, into the CPU's work RAM (bank $7E/$7F
-  // offsets; the mirrors below $2000 map to $7E:0000..$7E:1FFF).
-  auto applyIfDue(unsigned frame, uint8_t* wram) -> void {
+  // Apply once, at the named VIDEO frame, into the CPU's work RAM (bank
+  // $7E/$7F offsets; the mirrors below $2000 map to $7E:0000..$7E:1FFF).
+  // The frame counted here is the video frame since the recording began -
+  // not the recorder's record count, which under BSNES_TRACE_RAM_PAIRED
+  // steps twice per bracketed call and once for the baseline, so that
+  // BSNES_POKE_AT=0 was never reached for a routine the frame calls
+  // (fzero-rs found it on 2026-09-19 after three recordings of play
+  // wearing a forged label, caught only by a check on the [poke] line).
+  unsigned videoFrames = 0;
+  auto applyIfDue(uint8_t* wram) -> void {
+    unsigned frame = videoFrames++;
     if(!enabled() || state != 1 || frame != at) return;
     for(unsigned i = 0; i < count; i++) {
       auto address = writes[i].address;
