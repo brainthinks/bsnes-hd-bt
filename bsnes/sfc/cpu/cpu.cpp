@@ -44,7 +44,7 @@ auto CPU::main() -> void {
   if(!status.interruptPending) {
     //BSNES_TRACE_EXEC: here the PC is an instruction start and the flags are the
     //widths it runs with, which is exactly what a disassembler cannot infer
-    if(RamTrace::tracingExec()) RamTrace::noteExec(r.pc.d, r.p.m, r.p.x);
+    if(RamTrace::tracingExec()) RamTrace::noteExec(r.pc.d, r.p.m, r.p.x, r.s.w);
     //BSNES_TRACE_RAM_AT: snapshot RAM as a routine finds it, which is the only
     //way to capture inputs that later code in the same frame overwrites
     if(RamTrace::snapshotting() && RamTrace::atEntry(r.pc.d)) {
@@ -64,6 +64,9 @@ auto CPU::main() -> void {
     return instruction();
   }
 
+  //BSNES_TRACE_EXEC_BRACKET: the stack pointer before the interrupt pushes its
+  //frame is the level the handler stays below until its rti
+  if(status.nmiPending || status.irqPending) RamTrace::noteInterrupt(r.s.w);
   if(status.nmiPending) {
     status.nmiPending = 0;
     r.vector = r.e ? 0xfffa : 0xffea;

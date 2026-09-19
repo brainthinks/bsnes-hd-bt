@@ -734,8 +734,33 @@ inline auto coverageBracketed() -> bool {
 inline auto tracingExec() -> bool {
   return coverage().enabled() && coverageWanted(recorder().recordedFrames());
 }
-inline auto noteExec(unsigned pc, bool m8, bool x8) -> void {
-  if(coverageBracketed() && !bracketCovers(pc)) return;
+//An interrupt taken between a paired check's entry and its exit runs inside
+//the bracket in time and outside it in every other sense: the check does not
+//compare what the handler wrote (fzero-rs watches the whole of work RAM less
+//the raster chain's continuation pointer for exactly this reason), so the
+//handler's instructions must not be credited to it. Measured before this
+//existed: the tow-pit map carried 26 starts of the IRQ raster chain among its
+//278, and the three player-progress brackets carried the NMI handler and
+//everything it calls - four to seven thousand starts for a routine of a
+//hundred bytes. The stack pointer says where the handler is: it is below the
+//level the interrupt was taken at until the rti pops it back, and no code
+//outside the handler can run below that level in between.
+struct InterruptDepth {
+  auto entered(unsigned s) -> void { if(!inside) { inside = true; level = s; } }
+  //true while the handler that started at `level` has not returned
+  auto within(unsigned s) -> bool {
+    if(inside && s >= level) inside = false;
+    return inside;
+  }
+private:
+  bool inside = false;
+  unsigned level = 0;
+};
+inline auto interruptDepth() -> InterruptDepth& { static InterruptDepth d; return d; }
+inline auto noteInterrupt(unsigned s) -> void { interruptDepth().entered(s); }
+
+inline auto noteExec(unsigned pc, bool m8, bool x8, unsigned s) -> void {
+  if(coverageBracketed() && (!bracketCovers(pc) || interruptDepth().within(s))) return;
   coverage().note(pc, m8, x8);
 }
 inline auto noteRead(unsigned address) -> void { coverage().noteRead(address); }
