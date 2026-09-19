@@ -64,6 +64,9 @@ auto CPU::main() -> void {
                                    dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
                                    audioRegs);
     }
+    if(RamTrace::timingTrace().enabled()) {
+      RamTrace::timingTrace().note(r.pc.d, counter.cpu, vcounter(), hcounter());
+    }
     return instruction();
   }
 
