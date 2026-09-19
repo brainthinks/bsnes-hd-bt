@@ -50,7 +50,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      9
+//   uint16 version      10
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -83,7 +83,7 @@
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// AudioSnapshot is forty bytes: pc as uint16, then a, x, y, sp, psw, the
+// AudioSnapshot is forty-nine bytes: pc as uint16, then a, x, y, sp, psw, the
 // control register, the DSP address, the four bytes each way through the
 // mailbox, the two spare bytes, and then each timer's divider, prescaler,
 // stage and output as three bytes apiece. One pad byte, and then the audio
@@ -99,11 +99,22 @@
 // sample. Those last two decide when things happen rather than what, and a
 // reimplementation without them has every envelope falling a few samples early
 // or late and every note starting on the wrong one of two samples. Two pad
-// bytes at the end.
+// bytes, and last a uint8 saying how far into the instruction it was executing
+// the snapshot fell, in the same cycles the count above is in -- so that
+// `cycles - phase` is the cycle at which that instruction began. It is there
+// because the snapshot is taken from the CPU's thread and the audio processor
+// hands control back to that thread from inside a read or a write of
+// $F4-$F7, which is partway through an instruction: without it a
+// reimplementation can only compare its registers on the frames where its own
+// instruction boundary happened to land on the recorded count.
 //
-// Version 8 is the same without regs_len, initial_regs and the per-frame
+// Version 9 is the same with a forty-eight byte snapshot carrying no
+// instruction phase -- and with three pad bytes, at 31, 46 and 47, that were
+// never assigned before they were written, so a version 9 recording's are
+// whatever the recorder's stack held.
+// Version 8 is version 9 without regs_len, initial_regs and the per-frame
 // register section.
-// Version 7 is the same with a snapshot carrying no rate counter and no
+// Version 7 is version 8 with a snapshot carrying no rate counter and no
 // alternate-sample toggle -- the same forty-eight bytes, with those three
 // reading as nought, which is why the version and not the length says whether
 // they are there.
@@ -139,7 +150,7 @@ struct Snapshot {
 // has done, and this says what it is about to do and what time it thinks it
 // is. SMP::snapshotForTrace fills it, which keeps the one place that knows
 // that processor's insides the one place that knows them.
-static constexpr unsigned AudioSnapshotBytes = 48;
+static constexpr unsigned AudioSnapshotBytes = 49;
 
 // The display and transfer registers, as the game last left them.
 //
@@ -317,7 +328,7 @@ private:
     }
 
     uint8_t header[46] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 9);
+    write16(header + 4, 10);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);

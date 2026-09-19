@@ -32,6 +32,16 @@ struct SMP : Processor::SPC700, Thread {
   //a reimplementation that assumed one would drift.
   uint64 traceClocks = 0;
 
+  //traceClocks as it stood when the instruction now being executed began, for
+  //BSNES_TRACE_APU. Set in main(), which is the only place an instruction
+  //starts, and never touched again until the next one: the difference between
+  //it and traceClocks is how far into the current instruction the processor
+  //is, and a snapshot taken from another thread is almost never taken between
+  //two of them -- the SMP hands control back to the CPU from inside readIO and
+  //writeIO on $F4-$F7 (sfc/smp/io.cpp), which is partway through whichever
+  //instruction named the mailbox.
+  uint64 traceInstructionClocks = 0;
+
 private:
   struct IO {
     //timing

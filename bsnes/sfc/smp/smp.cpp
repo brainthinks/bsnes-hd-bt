@@ -1,4 +1,8 @@
 #include <sfc/sfc.hpp>
+//For RamTrace::AudioSnapshotBytes: this file fills that buffer and is the one
+//place that knows what goes in it, so it should also be the one place that
+//cannot disagree with the recorder about how long it is.
+#include <emulator/ramtrace.hpp>
 
 namespace SuperFamicom {
 
@@ -24,6 +28,12 @@ auto SMP::Enter() -> void {
 }
 
 auto SMP::main() -> void {
+  //The one place an instruction begins. Everything that spends a cycle goes
+  //through wait()/waitIdle() and so through stepTimers(), which is where
+  //traceClocks moves; so traceClocks - traceInstructionClocks is exactly what
+  //the instruction now running has spent, with no table of opcode lengths and
+  //nothing assumed. For BSNES_TRACE_APU; inert otherwise.
+  traceInstructionClocks = traceClocks;
   if(r.wait) return instructionWait();
   if(r.stop) return instructionStop();
   instruction();
@@ -38,7 +48,12 @@ auto SMP::load() -> bool {
 }
 
 auto SMP::snapshotForTrace(uint8* out) -> void {
-  for(uint n : range(32)) out[n] = 0;
+  //The whole buffer, not the first thirty-two bytes. The caller's array is on
+  //the stack and the pad bytes at 31, 46 and 47 were never assigned, so every
+  //recording before this carried whatever happened to be there. Nothing reads
+  //them, but a recording is supposed to be a function of the run and those
+  //three bytes were not.
+  for(uint n : range(RamTrace::AudioSnapshotBytes)) out[n] = 0;
   out[0] = r.pc.byte.l;
   out[1] = r.pc.byte.h;
   out[2] = r.ya.byte.l;
@@ -73,6 +88,22 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   out[43] = rateCounter & 0xff;
   out[44] = rateCounter >> 8 & 0xff;
   out[45] = dsp.alternateForTrace() & 1;
+  //How far into the instruction it is executing this snapshot fell, in the
+  //same cycles the count above is in, so that `cycles - phase` is the cycle at
+  //which that instruction began. Cycles *spent* and not cycles *remaining*:
+  //spent is the processor's own bookkeeping and needs nothing but a
+  //subtraction, whereas remaining would need the instruction's total length,
+  //which this emulator never holds -- an SPC700 instruction's cost here is
+  //however many times its implementation happens to call wait(), and it has
+  //not finished calling them.
+  //
+  //Clamped at 255 rather than wrapped. Nothing reaches it in practice -- the
+  //longest instruction on this processor is eight cycles, twenty at the
+  //glitched wait-state dividers -- but a snapshot taken before the first
+  //instruction of a run would otherwise read the whole clock modulo 256, and a
+  //saturated byte says "do not believe me" where a wrapped one lies.
+  uint64 spent = (traceClocks >> 1) - (traceInstructionClocks >> 1);
+  out[48] = spent > 255 ? 255 : spent;
 }
 
 auto SMP::power(bool reset) -> void {
