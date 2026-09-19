@@ -745,22 +745,28 @@ inline auto tracingExec() -> bool {
 //hundred bytes. The stack pointer says where the handler is: it is below the
 //level the interrupt was taken at until the rti pops it back, and no code
 //outside the handler can run below that level in between.
+//
+//The level has to be re-read at *every* instruction start, not only at the
+//ones a bracket covers: the first version asked only inside the bracket, so a
+//level captured at an interrupt taken from the main loop was never cleared by
+//the rti's successor (outside any bracket), and a routine the main loop later
+//called - three bytes deeper on the stack, as every jsr is - sat "below the
+//handler" for the rest of the run. Both bracket maps came out empty.
 struct InterruptDepth {
   auto entered(unsigned s) -> void { if(!inside) { inside = true; level = s; } }
-  //true while the handler that started at `level` has not returned
-  auto within(unsigned s) -> bool {
-    if(inside && s >= level) inside = false;
-    return inside;
-  }
+  //asked at every instruction start: the rti's successor runs at `level` again
+  auto update(unsigned s) -> void { if(inside && s >= level) inside = false; }
+  auto within() const -> bool { return inside; }
 private:
   bool inside = false;
   unsigned level = 0;
 };
 inline auto interruptDepth() -> InterruptDepth& { static InterruptDepth d; return d; }
 inline auto noteInterrupt(unsigned s) -> void { interruptDepth().entered(s); }
+inline auto noteStack(unsigned s) -> void { interruptDepth().update(s); }
 
-inline auto noteExec(unsigned pc, bool m8, bool x8, unsigned s) -> void {
-  if(coverageBracketed() && (!bracketCovers(pc) || interruptDepth().within(s))) return;
+inline auto noteExec(unsigned pc, bool m8, bool x8) -> void {
+  if(coverageBracketed() && (!bracketCovers(pc) || interruptDepth().within())) return;
   coverage().note(pc, m8, x8);
 }
 inline auto noteRead(unsigned address) -> void { coverage().noteRead(address); }
