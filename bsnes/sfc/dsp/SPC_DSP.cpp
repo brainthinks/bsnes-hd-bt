@@ -568,6 +568,12 @@ VOICE_CLOCK( V4 )
 }
 inline VOICE_CLOCK( V5 )
 {
+	//For BSNES_TRACE_APU (trace v13): this voice has now been carried into
+	//the sample in flight. One bit a voice, cleared at the sample boundary,
+	//and set here rather than worked out from the step number because the
+	//point of recording it is to be told rather than to assume.
+	traceCarried |= v->vbit;
+	
 	// Output right
 	voice_output( v, 1 );
 	

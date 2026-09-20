@@ -47,6 +47,33 @@ struct DSP {
   auto blockOffsetForTrace(uint v) const -> uint { return spc_dsp.blockOffsetForTrace(v); }
   auto blockHeaderForTrace(uint v) const -> uint { return spc_dsp.blockHeaderForTrace(v); }
 
+  //BSNES_TRACE_APU (trace v13). The eight per-voice blocks, taken at the
+  //boundary the sample in flight began at rather than wherever in that sample
+  //the snapshot happens to fall.
+  //
+  //Why the buffer exists at all: this chip walks its eight voices three steps
+  //apart, so a snapshot taken part-way through a sample catches some of them
+  //on the near side of their own step and some on the far side. Written out
+  //as they stand, the eight blocks are eight instants, and a reimplementation
+  //that stands them all at one boundary is a sample short for every voice the
+  //chip had already carried. Nothing in the record said so, and version 12
+  //recordings carry that split unannounced.
+  //
+  //So the recorder keeps the blocks it would have written at the last
+  //boundary and writes *those*: one instant, before any of the eight was
+  //carried, and the instant a restored chip picks up from -- it then makes
+  //the sample in flight for itself, exactly as this one is doing.
+  auto captureVoicesForTrace() -> void;
+  auto voiceBlocksForTrace() const -> const uint8* { return traceVoiceBlocks; }
+  //And which voices the chip has carried since that boundary, one bit a
+  //voice, so the version 12 split can be read out of a version 13 recording
+  //rather than inferred from the step number.
+  auto carriedForTrace() const -> uint { return spc_dsp.carriedForTrace(); }
+  //Forty bytes a voice, eight voices, laid out by SMP::snapshotForTrace's
+  //documentation of the record.
+  static constexpr uint VoiceBlockBytes = 40;
+  uint8 traceVoiceBlocks[8 * VoiceBlockBytes] = {};
+
   //BSNES_DUMP_SAMPLES, which writes this chip's output where a reimplementation
   //of it can be compared against it one sample at a time.
   auto dumpSamples(const int16* samples, uint count) -> void;

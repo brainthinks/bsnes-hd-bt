@@ -306,6 +306,16 @@ public:
     int blockHeaderForTrace(int v) const {
       return m.ram ? m.ram [m.voices[v].brr_addr & 0xFFFF] : 0;
     }
+    //Which voices this chip has already carried into the sample it is in the
+    //middle of (trace v13). One bit a voice, set where that voice's own step
+    //runs and cleared at the sample boundary by the recorder, so it is the
+    //chip saying which of its eight voices the snapshot caught on the far
+    //side of their own step -- not a rule derived from the step number and
+    //then assumed. It is what says that a mid-sample record of eight voices
+    //is eight instants and not one.
+    int traceCarried = 0;
+    int carriedForTrace() const { return traceCarried; }
+    void clearCarriedForTrace() { traceCarried = 0; }
 };
 
 #include <assert.h>

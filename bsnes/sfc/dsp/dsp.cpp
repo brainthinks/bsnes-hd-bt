@@ -8,6 +8,12 @@ DSP dsp;
 #include "SPC_DSP.cpp"
 
 auto DSP::main() -> void {
+  //BSNES_TRACE_APU (trace v13): at a sample boundary, and before this sample's
+  //first step runs, keep the eight per-voice blocks as they stand. That is the
+  //one instant in a sample at which all eight voices are on the same side of
+  //their own step, and it is the instant a snapshot taken anywhere inside this
+  //sample is restored to. Cheap enough to leave on: 320 bytes a sample.
+  if(spc_dsp.phaseForTrace() == 0) captureVoicesForTrace();
   if(!configuration.hacks.dsp.fast) {
     spc_dsp.run(1);
     clock += 2;
@@ -117,6 +123,50 @@ auto DSP::dumpSamples(const int16* samples, uint count) -> void {
     uint8 word[2] = {(uint8)(samples[n] & 0xff), (uint8)(samples[n] >> 8 & 0xff)};
     fwrite(word, 1, 2, file);
   }
+}
+
+//BSNES_TRACE_APU (trace v13): the eight per-voice blocks as of the boundary
+//the sample now being made began at, and the start of a new carried mask.
+//
+//The layout is the record's and is documented where the record is documented,
+//in SMP::snapshotForTrace: forty bytes a voice, indexed rather than parsed.
+//It is written here rather than there because *when* it is taken is the whole
+//point -- a snapshot can fall anywhere in a sample, and this can only be taken
+//at the boundary.
+auto DSP::captureVoicesForTrace() -> void {
+  for(uint v : range(8)) {
+    uint8* b = traceVoiceBlocks + v * VoiceBlockBytes;
+    uint env = spc_dsp.envelopeForTrace(v);
+    b[0] = env & 0xff;
+    b[1] = env >> 8 & 0xff;
+    b[2] = spc_dsp.envelopePhaseForTrace(v) & 3;
+    b[3] = spc_dsp.keyOnDelayForTrace(v) & 0xff;
+    //Signed on the chip -- a linear decrease that has gone past nought is how
+    //the two-slope mode's test is reached -- and carried as the low sixteen
+    //bits of it, which is every value the arithmetic can leave there.
+    uint hidden = (uint)spc_dsp.hiddenEnvelopeForTrace(v);
+    b[4] = hidden & 0xff;
+    b[5] = hidden >> 8 & 0xff;
+    uint block = spc_dsp.blockForTrace(v);
+    b[6] = block & 0xff;
+    b[7] = block >> 8 & 0xff;
+    b[8] = spc_dsp.blockOffsetForTrace(v) & 0xff;
+    b[9] = spc_dsp.blockHeaderForTrace(v) & 0xff;
+    b[10] = spc_dsp.decodedAtForTrace(v) & 0xff;
+    b[11] = 0;
+    uint interp = (uint)spc_dsp.interpForTrace(v);
+    b[12] = interp & 0xff;
+    b[13] = interp >> 8 & 0xff;
+    b[14] = 0; b[15] = 0;
+    for(uint n : range(12)) {
+      uint sample = (uint)spc_dsp.decodedForTrace(v, n);
+      b[16 + n * 2] = sample & 0xff;
+      b[17 + n * 2] = sample >> 8 & 0xff;
+    }
+  }
+  //A new sample, so nothing has been carried into it yet. The chip sets the
+  //bits itself as each voice's step runs.
+  spc_dsp.clearCarriedForTrace();
 }
 
 //BSNES_DUMP_VOICES: each voice's envelope and its own output, per sample.

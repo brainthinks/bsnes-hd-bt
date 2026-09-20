@@ -188,36 +188,32 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   //              plays silence into the middle of a note. The last two before
   //              the write position are also the block filter's memory, which
   //              is why they are not kept separately.
-  for(uint v : range(8)) {
-    uint8* b = out + 50 + v * 40;
-    uint env = dsp.envelopeForTrace(v);
-    b[0] = env & 0xff;
-    b[1] = env >> 8 & 0xff;
-    b[2] = dsp.envelopePhaseForTrace(v) & 3;
-    b[3] = dsp.keyOnDelayForTrace(v) & 0xff;
-    //Signed on the chip -- a linear decrease that has gone past nought is how
-    //the two-slope mode's test is reached -- and carried as the low sixteen
-    //bits of it, which is every value the arithmetic can leave there.
-    uint hidden = (uint)dsp.hiddenEnvelopeForTrace(v);
-    b[4] = hidden & 0xff;
-    b[5] = hidden >> 8 & 0xff;
-    uint block = dsp.blockForTrace(v);
-    b[6] = block & 0xff;
-    b[7] = block >> 8 & 0xff;
-    b[8] = dsp.blockOffsetForTrace(v) & 0xff;
-    b[9] = dsp.blockHeaderForTrace(v) & 0xff;
-    b[10] = dsp.decodedAtForTrace(v) & 0xff;
-    b[11] = 0;
-    uint interp = (uint)dsp.interpForTrace(v);
-    b[12] = interp & 0xff;
-    b[13] = interp >> 8 & 0xff;
-    b[14] = 0; b[15] = 0;
-    for(uint n : range(12)) {
-      uint sample = (uint)dsp.decodedForTrace(v, n);
-      b[16 + n * 2] = sample & 0xff;
-      b[17 + n * 2] = sample >> 8 & 0xff;
-    }
-  }
+  //Taken at the boundary of the sample the chip is in the middle of, not here
+  //(trace v13). See DSP::captureVoicesForTrace: this chip walks its eight
+  //voices three steps apart, so the eight blocks read off it *here* would be
+  //eight instants -- some voices on the near side of their own step and some
+  //on the far side -- and a reimplementation can only stand them at one
+  //boundary. It is handed the boundary, and makes the sample in flight for
+  //itself from there, which is what the machine is doing at this instant too.
+  //With one exception, which the record itself found: a snapshot taken with
+  //the chip *on* a boundary (out[42] nought) is at a boundary, and the kept
+  //blocks are then the previous one -- a whole sample early. The chip is
+  //standing exactly where the blocks are meant to be taken, so they are taken
+  //now. (What found it: the carried bytes below said every voice had been
+  //carried at step nought, which is the mask of the sample just finished.)
+  if(dsp.phaseForTrace() == 0) dsp.captureVoicesForTrace();
+  memcpy(out + 50, dsp.voiceBlocksForTrace(), 8 * 40);
+
+  //And which voices the chip has carried into the sample in flight since that
+  //boundary: one byte a voice, nought or one, at 370 + voice.
+  //
+  //Nothing in the restore needs it -- the blocks above are one instant now --
+  //and it is recorded because it is the measurement version 12's split was
+  //argued from: the chip says which voices it has reached rather than a reader
+  //working it out from out[42] and the three-step stagger. A reader can hold
+  //the two against each other in any recording that carries both.
+  uint carried = dsp.carriedForTrace();
+  for(uint v : range(8)) out[370 + v] = carried >> v & 1;
 }
 
 auto SMP::power(bool reset) -> void {

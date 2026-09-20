@@ -50,7 +50,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      12
+//   uint16 version      13
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -83,9 +83,10 @@
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// AudioSnapshot is three hundred and seventy bytes: fifty for the audio
-// processor and then forty for each of the sound chip's eight voices. The
-// first fifty are: pc as uint16, then a, x, y, sp, psw, the
+// AudioSnapshot is three hundred and seventy-eight bytes: fifty for the audio
+// processor, forty for each of the sound chip's eight voices, and one a voice
+// after those saying whether the chip had carried that voice into the sample
+// the snapshot fell inside. The first fifty are: pc as uint16, then a, x, y, sp, psw, the
 // control register, the DSP address, the four bytes each way through the
 // mailbox, the two spare bytes, and then each timer's divider, prescaler,
 // stage and output as three bytes apiece. One pad byte, and then the audio
@@ -124,7 +125,7 @@
 // divider was the odd clock -- half a cycle *further on* than the halved
 // prescaler says.
 //
-// And last, after that fiftieth byte, eight forty-byte blocks, one to a voice
+// And after that fiftieth byte, eight forty-byte blocks, one to a voice
 // and laid out the same way for each, so that a reader indexes them rather
 // than parsing: `50 + voice * 40`. Each block holds what that voice is in the
 // middle of, none of which is readable through any register and all of which
@@ -150,7 +151,30 @@
 // show, or which of ADSR's four phases it is in. That is the whole of what a
 // restored sound chip used to be unable to know.
 //
-// Version 11 is the same with a fifty-byte snapshot and no voice blocks.
+// The eight blocks are all taken at **one instant**: the boundary at which the
+// sample the snapshot fell inside began, and not the instant of the snapshot
+// itself. The chip walks its eight voices three of its thirty-two steps apart,
+// so at any instant inside a sample some voices have been carried into that
+// sample and some have not, and blocks read off the chip where the snapshot
+// falls are eight instants rather than one. A reimplementation can only stand
+// eight voices at one boundary; this record is that boundary, and the sample
+// in flight is one it makes for itself, exactly as the machine is doing at the
+// instant of the snapshot.
+//
+// And last, after the eight blocks, eight bytes at `370 + voice`: one where
+// the chip had already carried that voice into the sample in flight when the
+// snapshot was taken, nought where it had not. Nothing in a restore needs it,
+// because the blocks above are one instant. It is recorded because it is the
+// *measurement* the split was argued from -- the chip saying which voices it
+// had reached, rather than a reader inferring it from the step at byte 42 and
+// the three-step stagger -- and because a reader can hold the two against each
+// other in every record of a version 13 recording.
+//
+// Version 12 is the same with the eight blocks read off the chip wherever the
+// snapshot fell -- so up to eight instants, with nothing in the file saying
+// which voices were on which side -- and with no carried bytes: three hundred
+// and seventy bytes in all.
+// Version 11 is version 12 with a fifty-byte snapshot and no voice blocks.
 // Version 10 is version 11 with a forty-nine byte snapshot carrying no dropped
 // clocks, so a divider restored from one of its records is behind the
 // machine's by half a cycle as often as not, and nothing in the file says
@@ -195,12 +219,12 @@ struct Snapshot {
 // The audio processor when a record was taken arrives here already laid out,
 // as the bytes described above: its RAM says what the sound driver has done,
 // and this says what it is about to do, what time it thinks it is, and -- in
-// the eight per-voice blocks after the fiftieth byte -- what the sound chip is
-// in the middle of. SMP::snapshotForTrace fills it, which keeps the one place
+// the eight per-voice blocks after the fiftieth byte -- what the sound chip
+// was in the middle of at the boundary the sample in flight began at. SMP::snapshotForTrace fills it, which keeps the one place
 // that knows that processor's insides the one place that knows them. (The
 // count said "thirty-two" from version 6 to version 11 while the block grew
 // from forty to fifty; the number is now in one place, below.)
-static constexpr unsigned AudioSnapshotBytes = 370;
+static constexpr unsigned AudioSnapshotBytes = 378;
 
 // The display and transfer registers, as the game last left them.
 //
@@ -378,7 +402,7 @@ private:
     }
 
     uint8_t header[46] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 12);
+    write16(header + 4, 13);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
