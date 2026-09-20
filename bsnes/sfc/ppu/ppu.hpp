@@ -8,6 +8,11 @@ struct PPU : Thread, PPUcounter {
   //this is defined in ppu.cpp where the other two are visible.
   auto vramForTrace() const -> const uint16*;
 
+  //And the object table the picture is read through, for the same recorder:
+  //544 bytes in the hardware's own layout, written into the caller's buffer.
+  //Which core is running is a runtime setting, so this too is in ppu.cpp.
+  auto oamForTrace(uint8* out) -> void;
+
   alwaysinline auto interlace() const -> bool { return display.interlace; }
   alwaysinline auto overscan() const -> bool { return display.overscan; }
   alwaysinline auto vdisp() const -> uint { return display.vdisp; }

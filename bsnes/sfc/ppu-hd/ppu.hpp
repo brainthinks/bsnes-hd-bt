@@ -50,6 +50,12 @@ struct PPU : PPUcounter {
   auto vramAddressForTrace() const -> uint16 { return io.vramAddress; }
   auto vramForTrace() const -> const uint16* { return vram; }
 
+  //As in the fast core: the table the CPU would read back, from this core's
+  //own readObject().
+  auto oamForTrace(uint8* out) -> void {
+    for(uint n = 0; n < 544; n++) out[n] = readObject(n);
+  }
+
   //serialization.cpp
   auto serialize(serializer&) -> void;
 

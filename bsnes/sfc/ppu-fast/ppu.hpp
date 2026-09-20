@@ -12,6 +12,13 @@ struct PPU : PPUcounter {
   //other read-only accessors; the array itself stays where it is.
   auto vramForTrace() const -> const uint16* { return vram; }
 
+  //The object table for the recorder: readObject() is the core's own
+  //reconstruction of a hardware byte from its decoded objects, so a table
+  //built from it is the table the CPU would read back at $2138.
+  auto oamForTrace(uint8* out) -> void {
+    for(uint n = 0; n < 544; n++) out[n] = readObject(n);
+  }
+
   alwaysinline auto interlace() const -> bool;
   alwaysinline auto overscan() const -> bool;
   alwaysinline auto vdisp() const -> uint;

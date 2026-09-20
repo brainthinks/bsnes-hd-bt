@@ -21,6 +21,15 @@
 // port that draws: a routine whose whole job is moving bytes into video memory
 // has nothing to be compared against without it.
 //
+// The same flag records the object table, because the two are one question: a
+// picture is video memory read through a table of objects, and a recording that
+// carries only the first can say nothing about a sprite that is drawn where the
+// hardware drew none. It is 544 bytes - the 512-byte low table of 128 objects
+// four bytes apiece, and the 32-byte high table of two bits apiece, which is
+// what the hardware holds and what $2138 reads back - taken at the same instant
+// as video memory and from the same PPU core, and it is small enough that
+// gating it separately would buy nothing: 544 bytes against 65536.
+//
 // BSNES_TRACE_SRAM=1 does the same for the cartridge's battery RAM, the bank
 // $70 the game keeps its saved times in. Off by default for the same reason:
 // almost nothing reads it, and the one subsystem that does - the save block's
@@ -50,7 +59,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      13
+//   uint16 version      14
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -59,12 +68,14 @@
 //   uint32 apu_len      0x10000, or 0 when audio RAM was not recorded
 //   uint32 dsp_len      128, or 0 when the sound registers were not recorded
 //   uint32 regs_len     0x300, or 0 when the registers were not recorded
+//   uint32 oam_len      544, or 0 when the object table was not recorded
 //   uint8  initial[ram_len]
 //   uint8  initial_vram[vram_len]
 //   uint8  initial_save[save_len]
 //   uint8  initial_apu[apu_len]
 //   uint8  initial_dsp[dsp_len]
 //   uint8  initial_regs[regs_len]
+//   uint8  initial_oam[oam_len]
 //   AudioSnapshot initial_audio   (absent when apu_len is 0)
 //   per frame:
 //     uint16 input      controller 1, in $4218 bit order
@@ -80,6 +91,8 @@
 //     uint32 dsp_delta_count    (absent when dsp_len is 0)
 //     per delta: uint32 offset, uint8 value
 //     uint32 regs_delta_count   (absent when regs_len is 0)
+//     per delta: uint32 offset, uint8 value
+//     uint32 oam_delta_count    (absent when oam_len is 0)
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
@@ -179,6 +192,10 @@
 // clocks, so a divider restored from one of its records is behind the
 // machine's by half a cycle as often as not, and nothing in the file says
 // which records those are.
+// Version 13 is version 14 without oam_len, initial_oam and the per-frame
+// object-table section -- so a version 13 recording made with
+// BSNES_TRACE_VRAM=1 carries video memory and says nothing at all about which
+// objects the hardware was drawing it through.
 // Version 9 is version 10 with a forty-eight byte snapshot carrying no
 // instruction phase -- and with three pad bytes, at 31, 46 and 47, that were
 // never assigned before they were written, so a version 9 recording's are
@@ -225,6 +242,12 @@ struct Snapshot {
 // count said "thirty-two" from version 6 to version 11 while the block grew
 // from forty to fifty; the number is now in one place, below.)
 static constexpr unsigned AudioSnapshotBytes = 378;
+
+// The hardware's object table: 128 objects of four bytes - x low, y, tile,
+// attributes - and then two bits an object of x's ninth bit and size, packed
+// four objects to a byte. 512 + 32. A caller sizes its buffer from here and
+// fills it from the PPU core that is actually running.
+static constexpr unsigned ObjectBytes = 544;
 
 // The display and transfer registers, as the game last left them.
 //
@@ -282,17 +305,18 @@ struct Recorder {
                const uint16_t* video = nullptr, const uint8_t* save = nullptr,
                unsigned saveSize = 0, const uint8_t* apu = nullptr,
                const uint8_t* dspRegs = nullptr, bool audioIsHonest = true,
-               const uint8_t* audioRegs = nullptr) -> void {
+               const uint8_t* audioRegs = nullptr,
+               const uint8_t* oam = nullptr) -> void {
     if(!enabled(length)) return;
     if(!started) {
       started = true;
       if(!open(length, ram, regs, video, save, saveSize, apu, dspRegs, audioIsHonest,
-               audioRegs)) return;
+               audioRegs, oam)) return;
       return;
     }
     if(!file) return;
     if(skip) { skip--; return; }
-    writeFrame(ram, regs, video, save, apu, dspRegs, audioRegs);
+    writeFrame(ram, regs, video, save, apu, dspRegs, audioRegs, oam);
   }
 
   // One button, as the SNES gamepad enum orders them. Accumulated until the
@@ -321,6 +345,8 @@ struct Recorder {
     dspShadow = nullptr;
     delete[] regsShadow;
     regsShadow = nullptr;
+    delete[] oamShadow;
+    oamShadow = nullptr;
   }
 
 private:
@@ -346,7 +372,7 @@ private:
   auto open(unsigned length, const uint8_t* ram, const Snapshot& regs,
             const uint16_t* video, const uint8_t* save, unsigned saveSize,
             const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest,
-            const uint8_t* audioRegs) -> bool {
+            const uint8_t* audioRegs, const uint8_t* oam) -> bool {
     auto path = getenv("BSNES_TRACE_RAM");
     if(!path) return false;
     if(auto after = getenv("BSNES_TRACE_RAM_AFTER")) skip = (unsigned)atoi(after);
@@ -362,6 +388,16 @@ private:
     if(videoLen) {
       videoShadow = new uint8_t[videoLen];
       flatten(videoShadow, video);
+    }
+
+    //And the object table, on the same flag: video memory without the table it
+    //is read through cannot answer a question about a sprite. A caller with a
+    //core to read gets the core's; one with none gets zeroes, which is what a
+    //machine with no objects would read back anyway.
+    if(oam && videoLen) oamLen = ObjectBytes;
+    if(oamLen) {
+      oamShadow = new uint8_t[oamLen];
+      memcpy(oamShadow, oam, oamLen);
     }
 
     //The cartridge's battery RAM, on the same terms.
@@ -401,8 +437,8 @@ private:
       memcpy(regsShadow, registerFile().bytes, regsLen);
     }
 
-    uint8_t header[46] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 13);
+    uint8_t header[50] = {'F', 'Z', 'T', 'R'};
+    write16(header + 4, 14);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
@@ -411,6 +447,7 @@ private:
     write32(header + 34, apuLen);
     write32(header + 38, dspLen);
     write32(header + 42, regsLen);
+    write32(header + 46, oamLen);
     fwrite(header, 1, sizeof(header), file);
     fwrite(ram, 1, len, file);
     if(videoLen) fwrite(videoShadow, 1, videoLen, file);
@@ -418,6 +455,7 @@ private:
     if(apuLen) fwrite(apuShadow, 1, apuLen, file);
     if(dspLen) fwrite(dspShadow, 1, dspLen, file);
     if(regsLen) fwrite(regsShadow, 1, regsLen, file);
+    if(oamLen) fwrite(oamShadow, 1, oamLen, file);
     if(apuLen) writeAudioRegisters(audioRegs);
     atexit(closeAtExit);
     return true;
@@ -434,7 +472,7 @@ private:
 
   auto writeFrame(const uint8_t* ram, const Snapshot& regs, const uint16_t* video,
                   const uint8_t* save, const uint8_t* apu, const uint8_t* dspRegs,
-                  const uint8_t* audioRegs) -> void {
+                  const uint8_t* audioRegs, const uint8_t* oam) -> void {
     // count first, so the record can be written in one pass
     uint32_t changed = 0;
     for(unsigned n = 0; n < len; n++) changed += ram[n] != shadow[n];
@@ -458,6 +496,7 @@ private:
     if(apuLen) writeDeltas(apu, apuShadow, apuLen);
     if(dspLen) writeDeltas(dspRegs, dspShadow, dspLen);
     if(regsLen) writeDeltas(registerFile().bytes, regsShadow, regsLen);
+    if(oamLen) writeDeltas(oam, oamShadow, oamLen);
     if(apuLen) writeAudioRegisters(audioRegs);
     frames++;
     input = 0;
@@ -536,6 +575,8 @@ private:
   unsigned dspLen = 0;
   uint8_t* regsShadow = nullptr;
   unsigned regsLen = 0;
+  uint8_t* oamShadow = nullptr;
+  unsigned oamLen = 0;
   unsigned len = 0;
   uint32_t frames = 0;
   unsigned input = 0;

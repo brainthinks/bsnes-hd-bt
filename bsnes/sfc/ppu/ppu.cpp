@@ -198,6 +198,16 @@ auto PPU::vramForTrace() const -> const uint16* {
   return vram.data;
 }
 
+//The object table as the hardware holds it, which is what $2138 reads back:
+//128 objects of x-low, y, tile and attributes, then the high table's two bits
+//an object. Each core already has the read that reconstructs a byte from its
+//own decoded objects, so this walks that rather than a second layout.
+auto PPU::oamForTrace(uint8* out) -> void {
+  if(system.hdPPU()) { ppuhd.oamForTrace(out); return; }
+  if(system.fastPPU()) { ppufast.oamForTrace(out); return; }
+  for(uint n = 0; n < 544; n++) out[n] = obj.oam.read(n);
+}
+
 auto PPU::refresh() -> void {
   if(system.hdPPU()) {
     return ppuhd.refresh();

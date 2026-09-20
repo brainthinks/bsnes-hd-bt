@@ -58,11 +58,15 @@ auto CPU::main() -> void {
       regs.s = r.s.w; regs.d = r.d.w; regs.db = r.b; regs.p = r.p;
       uint8 audioRegs[RamTrace::AudioSnapshotBytes];
       smp.snapshotForTrace(audioRegs);
+      //the object table at the same instant as video memory, from the core
+      //that is running
+      uint8 oam[RamTrace::ObjectBytes];
+      ppu.oamForTrace(oam);
       RamTrace::recorder().observe(wram, sizeof(wram), regs, ppu.vramForTrace(),
                                    cartridge.ram.data(), cartridge.ram.size(),
                                    dsp.apuramForTrace(), dsp.registersForTrace(),
                                    dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
-                                   audioRegs);
+                                   audioRegs, oam);
     }
     if(RamTrace::timingTrace().enabled()) {
       RamTrace::timingTrace().note(r.pc.d, counter.cpu, vcounter(), hcounter());

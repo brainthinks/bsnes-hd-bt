@@ -119,11 +119,15 @@ auto System::frameEvent() -> void {
   if(!RamTrace::snapshotting()) {
     uint8 audioRegs[RamTrace::AudioSnapshotBytes];
     smp.snapshotForTrace(audioRegs);
+    //the object table at the same instant as video memory, from the core that
+    //is running: ppu.refresh() above has just drawn the frame from it
+    uint8 oam[RamTrace::ObjectBytes];
+    ppu.oamForTrace(oam);
     RamTrace::recorder().observe(cpu.wram, sizeof(cpu.wram), {}, ppu.vramForTrace(),
                                  cartridge.ram.data(), cartridge.ram.size(),
                                  dsp.apuramForTrace(), dsp.registersForTrace(),
                                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
-                                 audioRegs);
+                                 audioRegs, oam);
   }
 
   //refresh all cheat codes once per frame
