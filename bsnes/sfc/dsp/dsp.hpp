@@ -41,6 +41,11 @@ struct DSP {
   //BSNES_DUMP_STAGES, which writes what the final sample was made of.
   auto dumpStages() -> void;
   auto envelopePhaseForTrace(uint v) const -> uint { return spc_dsp.envelopePhaseForTrace(v); }
+  auto hiddenEnvelopeForTrace(uint v) const -> int { return spc_dsp.hiddenEnvelopeForTrace(v); }
+  auto keyOnDelayForTrace(uint v) const -> uint { return spc_dsp.keyOnDelayForTrace(v); }
+  auto blockForTrace(uint v) const -> uint { return spc_dsp.blockForTrace(v); }
+  auto blockOffsetForTrace(uint v) const -> uint { return spc_dsp.blockOffsetForTrace(v); }
+  auto blockHeaderForTrace(uint v) const -> uint { return spc_dsp.blockHeaderForTrace(v); }
 
   //BSNES_DUMP_SAMPLES, which writes this chip's output where a reimplementation
   //of it can be compared against it one sample at a time.

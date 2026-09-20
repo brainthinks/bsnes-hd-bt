@@ -127,6 +127,97 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   out[49] = (timer0.stage0 & 1) << 0
           | (timer1.stage0 & 1) << 1
           | (timer2.stage0 & 1) << 2;
+
+  //And eight forty-byte blocks, one a voice, carrying what that voice is in
+  //the middle of (trace v12). Everything above this line is the audio
+  //processor; everything below it is the sound chip's own insides, and none of
+  //it is readable through a register -- which is why a reimplementation handed
+  //RAM and all 128 registers still has to start its voices from silence.
+  //
+  //The layout is fixed and the same for every voice, so a reader indexes it
+  //rather than parsing it: block = 50 + voice * 40.
+  //
+  //  +0  uint16  envelope level, 0..0x7FF. The chip carries eleven bits of it
+  //              and the register a driver can read ($x8) shows the top seven,
+  //              so a level restored from the register alone is up to fifteen
+  //              short and every step after it is taken from the wrong place.
+  //  +2  uint8   which of the four phases the envelope is in: 0 release,
+  //              1 attack, 2 decay, 3 sustain. No register carries it at all.
+  //              The phase decides which rate the next step uses and whether
+  //              the step is added or subtracted.
+  //  +3  uint8   how many samples of the key-on delay are left, 0..5. The chip
+  //              does not begin a voice on the sample the driver asks for it;
+  //              it counts down, fills the decode buffer while counting, and
+  //              sounds afterwards. A restored voice that ignores this begins
+  //              its note up to five samples from where the machine begins it.
+  //  +4  uint16  the envelope the ADSR/GAIN arithmetic carries before it is
+  //              clamped to 0..0x7FF. The two-slope GAIN mode reads this
+  //              rather than the clamped level to decide which of its two
+  //              slopes it is on, so a chip restored without it takes the
+  //              wrong slope for as long as that mode is selected.
+  //  +6  uint16  where in audio RAM the BRR block being decoded starts.
+  //  +8  uint8   how far into that block the decoder has got, in bytes. A
+  //              block is nine bytes -- a header and sixteen four-bit
+  //              differences -- and four samples come out of two bytes, so
+  //              this runs 1, 3, 5, 7 and the block is left at 9.
+  //  +9  uint8   that block's header byte: the shift in the top four bits,
+  //              the filter in bits 2-3, and whether the block loops or ends
+  //              in the bottom two. It is readable from audio RAM at the
+  //              address at +6, and is carried beside it so that a reader can
+  //              check the block walk against the RAM the record already
+  //              holds rather than re-deriving where the walk had got to.
+  // +10  uint8   where in the twelve-sample decode buffer the next four go,
+  //              0, 4 or 8. It is also where the interpolation window starts,
+  //              because the group the position is inside is the one the
+  //              decoder will overwrite last.
+  // +11  uint8   nought. Reserved, and written rather than left, because a
+  //              recording is meant to be a function of the run.
+  // +12  uint16  where the voice is between two decoded samples. The low
+  //              twelve bits are the fraction the interpolation curve is read
+  //              at and the bits above say which of the buffer's samples the
+  //              four taps start on, counting from +10. This is the one field
+  //              that says *where in its own waveform* a sounding note is;
+  //              without it a restored voice is anywhere up to four samples
+  //              from where the machine has it and stays there.
+  // +14  2 bytes nought. Reserved.
+  // +16  12 x int16  the twelve decoded samples themselves, oldest group
+  //              first in buffer order (not in playing order -- +10 and +12
+  //              between them say where the window starts). The chip decodes
+  //              four at a time and draws its interpolation curve through four
+  //              consecutive ones, so a voice restored with an empty buffer
+  //              plays silence into the middle of a note. The last two before
+  //              the write position are also the block filter's memory, which
+  //              is why they are not kept separately.
+  for(uint v : range(8)) {
+    uint8* b = out + 50 + v * 40;
+    uint env = dsp.envelopeForTrace(v);
+    b[0] = env & 0xff;
+    b[1] = env >> 8 & 0xff;
+    b[2] = dsp.envelopePhaseForTrace(v) & 3;
+    b[3] = dsp.keyOnDelayForTrace(v) & 0xff;
+    //Signed on the chip -- a linear decrease that has gone past nought is how
+    //the two-slope mode's test is reached -- and carried as the low sixteen
+    //bits of it, which is every value the arithmetic can leave there.
+    uint hidden = (uint)dsp.hiddenEnvelopeForTrace(v);
+    b[4] = hidden & 0xff;
+    b[5] = hidden >> 8 & 0xff;
+    uint block = dsp.blockForTrace(v);
+    b[6] = block & 0xff;
+    b[7] = block >> 8 & 0xff;
+    b[8] = dsp.blockOffsetForTrace(v) & 0xff;
+    b[9] = dsp.blockHeaderForTrace(v) & 0xff;
+    b[10] = dsp.decodedAtForTrace(v) & 0xff;
+    b[11] = 0;
+    uint interp = (uint)dsp.interpForTrace(v);
+    b[12] = interp & 0xff;
+    b[13] = interp >> 8 & 0xff;
+    b[14] = 0; b[15] = 0;
+    for(uint n : range(12)) {
+      uint sample = (uint)dsp.decodedForTrace(v, n);
+      b[16 + n * 2] = sample & 0xff;
+      b[17 + n * 2] = sample >> 8 & 0xff;
+    }
+  }
 }
 
 auto SMP::power(bool reset) -> void {

@@ -279,6 +279,33 @@ public:
     int traceMainOut [2] = {};
     int traceEchoIn [2] = {};
     int envelopePhaseForTrace(int v) const { return m.voices[v].env_mode; }
+    //The rest of what one voice is in the middle of, for BSNES_TRACE_APU's
+    //per-voice block (trace v12). Every one of these is inside the chip and
+    //appears nowhere a driver could look, and every one of them decides what
+    //the *next* sample of that voice is.
+    //
+    //The envelope the ADSR/GAIN arithmetic carries before it is clamped. Only
+    //the two-slope GAIN mode reads it, and it reads it rather than the clamped
+    //level, so a chip restored without it takes the wrong slope for as long as
+    //that mode is selected.
+    int hiddenEnvelopeForTrace(int v) const { return m.voices[v].hidden_env; }
+    //How many samples of the key-on delay are left. The chip does not begin a
+    //voice on the sample the driver asks for it: it counts, decodes the
+    //buffer while counting, and sounds afterwards.
+    int keyOnDelayForTrace(int v) const { return m.voices[v].kon_delay; }
+    //Where in audio RAM the BRR block being decoded starts, and how far into
+    //it the decoder has got. A block is nine bytes -- a header and sixteen
+    //four-bit differences -- and the offset is the byte within it, so it runs
+    //1, 3, 5, 7 and the block is left at 9.
+    int blockForTrace(int v) const { return m.voices[v].brr_addr; }
+    int blockOffsetForTrace(int v) const { return m.voices[v].brr_offset; }
+    //And the header byte of that block, which says the shift, the filter, and
+    //whether the block is the last. It is readable from audio RAM at the
+    //address above and is carried beside it so a reader can check the block
+    //walk without re-deriving where the walk had got to.
+    int blockHeaderForTrace(int v) const {
+      return m.ram ? m.ram [m.voices[v].brr_addr & 0xFFFF] : 0;
+    }
 };
 
 #include <assert.h>

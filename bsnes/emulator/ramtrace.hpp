@@ -50,7 +50,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      11
+//   uint16 version      12
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -83,7 +83,9 @@
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// AudioSnapshot is fifty bytes: pc as uint16, then a, x, y, sp, psw, the
+// AudioSnapshot is three hundred and seventy bytes: fifty for the audio
+// processor and then forty for each of the sound chip's eight voices. The
+// first fifty are: pc as uint16, then a, x, y, sp, psw, the
 // control register, the DSP address, the four bytes each way through the
 // mailbox, the two spare bytes, and then each timer's divider, prescaler,
 // stage and output as three bytes apiece. One pad byte, and then the audio
@@ -122,7 +124,34 @@
 // divider was the odd clock -- half a cycle *further on* than the halved
 // prescaler says.
 //
-// Version 10 is the same with a forty-nine byte snapshot carrying no dropped
+// And last, after that fiftieth byte, eight forty-byte blocks, one to a voice
+// and laid out the same way for each, so that a reader indexes them rather
+// than parsing: `50 + voice * 40`. Each block holds what that voice is in the
+// middle of, none of which is readable through any register and all of which
+// decides what the voice's next sample is -- the envelope level to its full
+// eleven bits (uint16; the register a driver reads shows the top seven), which
+// of the four phases it is in (uint8: 0 release, 1 attack, 2 decay,
+// 3 sustain), how many samples of the key-on delay are left (uint8, 0..5),
+// the unclamped envelope the two-slope GAIN mode reads to choose its slope
+// (uint16), where in audio RAM the BRR block being decoded starts (uint16) and
+// how far into its nine bytes the decoder has got (uint8, 1/3/5/7), that
+// block's header byte (uint8, readable from the RAM the record already carries
+// and here so the block walk can be checked without re-deriving it), where in
+// the twelve-sample decode buffer the next four go (uint8, 0/4/8 -- which is
+// also where the interpolation window starts), one pad byte, where the voice
+// stands between two decoded samples (uint16: twelve bits of fraction for the
+// interpolation curve and the rest counting samples from the write position),
+// two more pad bytes, and then the twelve decoded samples as int16 in buffer
+// order. Every pad byte is written as nought, and the block is a round forty.
+//
+// Without this a reimplementation handed audio RAM and all 128 registers still
+// has to start its voices from silence: it cannot say where a sounding note is
+// in its waveform, how loud it is between the sixteen steps a register can
+// show, or which of ADSR's four phases it is in. That is the whole of what a
+// restored sound chip used to be unable to know.
+//
+// Version 11 is the same with a fifty-byte snapshot and no voice blocks.
+// Version 10 is version 11 with a forty-nine byte snapshot carrying no dropped
 // clocks, so a divider restored from one of its records is behind the
 // machine's by half a cycle as often as not, and nothing in the file says
 // which records those are.
@@ -164,11 +193,14 @@ struct Snapshot {
 };
 
 // The audio processor when a record was taken arrives here already laid out,
-// as the thirty-two bytes described above: its RAM says what the sound driver
-// has done, and this says what it is about to do and what time it thinks it
-// is. SMP::snapshotForTrace fills it, which keeps the one place that knows
-// that processor's insides the one place that knows them.
-static constexpr unsigned AudioSnapshotBytes = 50;
+// as the bytes described above: its RAM says what the sound driver has done,
+// and this says what it is about to do, what time it thinks it is, and -- in
+// the eight per-voice blocks after the fiftieth byte -- what the sound chip is
+// in the middle of. SMP::snapshotForTrace fills it, which keeps the one place
+// that knows that processor's insides the one place that knows them. (The
+// count said "thirty-two" from version 6 to version 11 while the block grew
+// from forty to fifty; the number is now in one place, below.)
+static constexpr unsigned AudioSnapshotBytes = 370;
 
 // The display and transfer registers, as the game last left them.
 //
@@ -346,7 +378,7 @@ private:
     }
 
     uint8_t header[46] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 11);
+    write16(header + 4, 12);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
