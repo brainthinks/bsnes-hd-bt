@@ -34,6 +34,9 @@ auto SMP::main() -> void {
   //the instruction now running has spent, with no table of opcode lengths and
   //nothing assumed. For BSNES_TRACE_APU; inert otherwise.
   traceInstructionClocks = traceClocks;
+  //And where it is being fetched from. r.pc has not moved yet here: the
+  //opcode is read by instruction() below, and every operand after it.
+  traceInstructionPC = r.pc.w;
   if(r.wait) return instructionWait();
   if(r.stop) return instructionStop();
   instruction();
@@ -214,6 +217,17 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   //the two against each other in any recording that carries both.
   uint carried = dsp.carriedForTrace();
   for(uint v : range(8)) out[370 + v] = carried >> v & 1;
+
+  //And where the instruction this snapshot fell inside was fetched from
+  //(trace v15). out[0..1] above is the counter as it stands *now*, which is
+  //the opcode plus however many operand bytes the cycles at out[48] have paid
+  //for -- `start + min(length, 1 + phase)`, and at a phase of nought that is
+  //the operand and not the next instruction. This is the start itself, taken
+  //in main() before the fetch, so a reimplementation that can only stand
+  //between instructions has a real boundary to begin at whatever the phase.
+  //It needs no opcode-length table here and none there.
+  out[378] = traceInstructionPC & 0xff;
+  out[379] = traceInstructionPC >> 8 & 0xff;
 }
 
 auto SMP::power(bool reset) -> void {

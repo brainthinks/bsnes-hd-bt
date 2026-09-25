@@ -42,6 +42,14 @@ struct SMP : Processor::SPC700, Thread {
   //instruction named the mailbox.
   uint64 traceInstructionClocks = 0;
 
+  //And where that instruction was fetched from: r.pc as it stood in main()
+  //before the opcode was read, for BSNES_TRACE_APU. r.pc in the snapshot has
+  //moved on by the opcode and by every operand byte the elapsed cycles have
+  //paid for, so it is not a boundary; this is, at any phase. Set in the same
+  //one place an instruction begins, so the pair cannot disagree about which
+  //instruction they describe.
+  uint16 traceInstructionPC = 0;
+
 private:
   struct IO {
     //timing

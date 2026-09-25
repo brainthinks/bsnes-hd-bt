@@ -59,7 +59,7 @@
 //
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      14
+//   uint16 version      15
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -96,10 +96,11 @@
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// AudioSnapshot is three hundred and seventy-eight bytes: fifty for the audio
-// processor, forty for each of the sound chip's eight voices, and one a voice
+// AudioSnapshot is three hundred and eighty bytes: fifty for the audio
+// processor, forty for each of the sound chip's eight voices, one a voice
 // after those saying whether the chip had carried that voice into the sample
-// the snapshot fell inside. The first fifty are: pc as uint16, then a, x, y, sp, psw, the
+// the snapshot fell inside, and a uint16 at the end saying where the
+// instruction the snapshot fell inside was fetched from. The first fifty are: pc as uint16, then a, x, y, sp, psw, the
 // control register, the DSP address, the four bytes each way through the
 // mailbox, the two spare bytes, and then each timer's divider, prescaler,
 // stage and output as three bytes apiece. One pad byte, and then the audio
@@ -183,6 +184,26 @@
 // the three-step stagger -- and because a reader can hold the two against each
 // other in every record of a version 13 recording.
 //
+// And last, at 378, a uint16: the address the parked instruction's opcode was
+// fetched from -- the program counter this processor held when it began the
+// instruction the snapshot fell inside, which is the one place an instruction
+// starts (SMP::main). It is the companion of the phase byte at 48 and closes
+// the same hole from the other end: the phase says how far into that
+// instruction the snapshot fell, and this says which instruction it was. The
+// program counter at byte 0 is neither, because the opcode and every operand
+// byte the elapsed cycles have paid for have already advanced it -- it is
+// `start + min(length in bytes, 1 + phase)`, which at a phase of nought is the
+// operand. A reimplementation that can only stand between instructions has
+// therefore no boundary in the record to start from: starting at byte 0 either
+// skips the rest of the parked instruction or, at a phase of nought, executes
+// an operand as an opcode. With this field it starts at a real boundary at any
+// phase, with no instruction-length table and no backward decode -- neither of
+// which the record could make unambiguous anyway.
+//
+// Version 14 is version 15 with a three hundred and seventy-eight byte
+// snapshot carrying no instruction start, and nought is an address the
+// counter genuinely takes, which is why the version and not the value says
+// whether it is there.
 // Version 12 is the same with the eight blocks read off the chip wherever the
 // snapshot fell -- so up to eight instants, with nothing in the file saying
 // which voices were on which side -- and with no carried bytes: three hundred
@@ -241,7 +262,7 @@ struct Snapshot {
 // that knows that processor's insides the one place that knows them. (The
 // count said "thirty-two" from version 6 to version 11 while the block grew
 // from forty to fifty; the number is now in one place, below.)
-static constexpr unsigned AudioSnapshotBytes = 378;
+static constexpr unsigned AudioSnapshotBytes = 380;
 
 // The hardware's object table: 128 objects of four bytes - x low, y, tile,
 // attributes - and then two bits an object of x's ninth bit and size, packed
@@ -438,7 +459,7 @@ private:
     }
 
     uint8_t header[50] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 14);
+    write16(header + 4, 15);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
