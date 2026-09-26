@@ -697,3 +697,94 @@ auto PPU::updateVideoMode() -> void {
     break;
   }
 }
+
+//BSNES_TRACE_REGS (2026-09-26): each register writeIO above keeps whole, read
+//back as the byte a store would have written. `values` and `known` are the
+//recorder's register file ($2100 at 0); a register left unknown is one this
+//core does not keep in a form that says what was stored, and why is beside
+//each in System::seedRegistersForTrace. Bits a register does not keep are
+//read as nought: a store that set one would differ there.
+auto PPU::registersForTrace(uint8* values, uint8* known) const -> void {
+  auto set = [&](uint address, uint value) {
+    values[address - 0x2100] = value;
+    known[address - 0x2100] = 1;
+  };
+  set(0x2100, io.displayDisable << 7 | (io.displayBrightness & 15));
+  set(0x2101, io.obj.baseSize << 5 | (io.obj.nameselect & 3) << 3 | (io.obj.tiledataAddress >> 13 & 3));
+  //the base address as written, not the internal address that walks on
+  set(0x2102, io.oamBaseAddress >> 1 & 0xff);
+  set(0x2103, io.oamPriority << 7 | (io.oamBaseAddress >> 9 & 1));
+  set(0x2105, io.bg4.tileSize << 7 | io.bg3.tileSize << 6 | io.bg2.tileSize << 5
+            | io.bg1.tileSize << 4 | io.bgPriority << 3 | (io.bgMode & 7));
+  set(0x2106, ((io.mosaic.size - 1) & 15) << 4 | io.bg4.mosaicEnable << 3 | io.bg3.mosaicEnable << 2
+            | io.bg2.mosaicEnable << 1 | io.bg1.mosaicEnable << 0);
+  set(0x2107, (io.bg1.screenAddress >> 8 & 0x7c) | (io.bg1.screenSize & 3));
+  set(0x2108, (io.bg2.screenAddress >> 8 & 0x7c) | (io.bg2.screenSize & 3));
+  set(0x2109, (io.bg3.screenAddress >> 8 & 0x7c) | (io.bg3.screenSize & 3));
+  set(0x210a, (io.bg4.screenAddress >> 8 & 0x7c) | (io.bg4.screenSize & 3));
+  set(0x210b, (io.bg2.tiledataAddress >> 8 & 0x70) | (io.bg1.tiledataAddress >> 12 & 7));
+  set(0x210c, (io.bg4.tiledataAddress >> 8 & 0x70) | (io.bg3.tiledataAddress >> 12 & 7));
+  //Every write to a scroll register puts the byte written in the top half of
+  //the offset, so the top half *is* the last byte stored there. $210D and
+  //$210E feed Mode 7's offsets as well from the same store; the two must agree.
+  if((io.bg1.hoffset >> 8) == (io.mode7.hoffset >> 8)) set(0x210d, io.bg1.hoffset >> 8);
+  if((io.bg1.voffset >> 8) == (io.mode7.voffset >> 8)) set(0x210e, io.bg1.voffset >> 8);
+  set(0x210f, io.bg2.hoffset >> 8);
+  set(0x2110, io.bg2.voffset >> 8);
+  set(0x2111, io.bg3.hoffset >> 8);
+  set(0x2112, io.bg3.voffset >> 8);
+  set(0x2113, io.bg4.hoffset >> 8);
+  set(0x2114, io.bg4.voffset >> 8);
+  //VMAIN keeps its increment as a step, and steps of 128 come from two
+  //settings; only an unambiguous one is an answer.
+  {
+    int step = io.vramIncrementSize == 1 ? 0 : io.vramIncrementSize == 32 ? 1 : -1;
+    if(step >= 0) set(0x2115, io.vramIncrementMode << 7 | (io.vramMapping & 3) << 2 | step);
+  }
+  set(0x211a, (io.mode7.repeat & 3) << 6 | io.mode7.vflip << 1 | io.mode7.hflip << 0);
+  //Each Mode 7 parameter is the byte just stored above the one stored before
+  //it, so its top half is the last byte stored to that register.
+  set(0x211b, io.mode7.a >> 8);
+  set(0x211c, io.mode7.b >> 8);
+  set(0x211d, io.mode7.c >> 8);
+  set(0x211e, io.mode7.d >> 8);
+  set(0x211f, io.mode7.x >> 8);
+  set(0x2120, io.mode7.y >> 8);
+  set(0x2123, io.bg2.window.twoEnable << 7 | io.bg2.window.twoInvert << 6
+            | io.bg2.window.oneEnable << 5 | io.bg2.window.oneInvert << 4
+            | io.bg1.window.twoEnable << 3 | io.bg1.window.twoInvert << 2
+            | io.bg1.window.oneEnable << 1 | io.bg1.window.oneInvert << 0);
+  set(0x2124, io.bg4.window.twoEnable << 7 | io.bg4.window.twoInvert << 6
+            | io.bg4.window.oneEnable << 5 | io.bg4.window.oneInvert << 4
+            | io.bg3.window.twoEnable << 3 | io.bg3.window.twoInvert << 2
+            | io.bg3.window.oneEnable << 1 | io.bg3.window.oneInvert << 0);
+  set(0x2125, io.col.window.twoEnable << 7 | io.col.window.twoInvert << 6
+            | io.col.window.oneEnable << 5 | io.col.window.oneInvert << 4
+            | io.obj.window.twoEnable << 3 | io.obj.window.twoInvert << 2
+            | io.obj.window.oneEnable << 1 | io.obj.window.oneInvert << 0);
+  set(0x2126, io.window.oneLeft);
+  set(0x2127, io.window.oneRight);
+  set(0x2128, io.window.twoLeft);
+  set(0x2129, io.window.twoRight);
+  set(0x212a, (io.bg4.window.mask & 3) << 6 | (io.bg3.window.mask & 3) << 4
+            | (io.bg2.window.mask & 3) << 2 | (io.bg1.window.mask & 3) << 0);
+  set(0x212b, (io.col.window.mask & 3) << 2 | (io.obj.window.mask & 3) << 0);
+  set(0x212c, io.obj.aboveEnable << 4 | io.bg4.aboveEnable << 3 | io.bg3.aboveEnable << 2
+            | io.bg2.aboveEnable << 1 | io.bg1.aboveEnable << 0);
+  set(0x212d, io.obj.belowEnable << 4 | io.bg4.belowEnable << 3 | io.bg3.belowEnable << 2
+            | io.bg2.belowEnable << 1 | io.bg1.belowEnable << 0);
+  set(0x212e, io.obj.window.aboveEnable << 4 | io.bg4.window.aboveEnable << 3
+            | io.bg3.window.aboveEnable << 2 | io.bg2.window.aboveEnable << 1
+            | io.bg1.window.aboveEnable << 0);
+  set(0x212f, io.obj.window.belowEnable << 4 | io.bg4.window.belowEnable << 3
+            | io.bg3.window.belowEnable << 2 | io.bg2.window.belowEnable << 1
+            | io.bg1.window.belowEnable << 0);
+  set(0x2130, (io.col.window.aboveMask & 3) << 6 | (io.col.window.belowMask & 3) << 4
+            | io.col.blendMode << 1 | io.col.directColor << 0);
+  set(0x2131, io.col.mathMode << 7 | io.col.halve << 6 | io.col.enable[Source::COL] << 5
+            | io.col.enable[Source::OBJ2] << 4 | io.col.enable[Source::BG4] << 3
+            | io.col.enable[Source::BG3] << 2 | io.col.enable[Source::BG2] << 1
+            | io.col.enable[Source::BG1] << 0);
+  set(0x2133, io.extbg << 6 | io.pseudoHires << 3 | io.overscan << 2
+            | io.obj.interlace << 1 | io.interlace << 0);
+}

@@ -57,9 +57,20 @@
 // Off by default, and cheap when on: 768 bytes of shadow, delta-encoded, and a
 // racing frame changes a couple of dozen of them.
 //
+// A recording that begins at a loaded state (BSNES_LOAD_STATE) begins with the
+// registers that state holds (since 2026-09-26, recorder-v16): at the load the
+// machine is asked what each register holds, as the byte a store would have
+// put there, and every byte it can answer for is seeded into the shadow before
+// the first record. Before that the shadow of such a recording began empty and
+// knew only the stores made after the load. What is and is not answered is the
+// comment on System::seedRegistersForTrace; the seed prints its count and the
+// bytes left out on stderr. BSNES_TRACE_REGS_SEED_CHECK=1 holds the same
+// reading against the shadow at every frame of a run, which on a cold boot is
+// the check that the reading says what a store said.
+//
 // Format, little-endian, matching the reader in the fzero-rs project:
 //   char   magic[4]     "FZTR"
-//   uint16 version      15
+//   uint16 version      16 when the audio snapshot is recorded, 15 when it is not
 //   uint32 ram_len      0x20000
 //   uint32 frame_count  patched on close
 //   Registers initial   the machine when the first record was taken
@@ -96,7 +107,7 @@
 //     per delta: uint32 offset, uint8 value
 //     AudioSnapshot regs        (absent when apu_len is 0)
 //
-// AudioSnapshot is three hundred and eighty bytes: fifty for the audio
+// AudioSnapshot is four hundred and twelve bytes: fifty for the audio
 // processor, forty for each of the sound chip's eight voices, one a voice
 // after those saying whether the chip had carried that voice into the sample
 // the snapshot fell inside, and a uint16 at the end saying where the
@@ -200,6 +211,24 @@
 // phase, with no instruction-length table and no backward decode -- neither of
 // which the record could make unambiguous anyway.
 //
+// And last, at 380, thirty-two bytes: the S-DSP's echo filter history (trace
+// v16) -- the eight samples a channel the eight-tap FIR last read out of the
+// echo buffer, oldest first, each as a left then a right int16, as the chip
+// holds them (already halved: the chip keeps the sample it read shifted right
+// by one and multiplies by coefficients of a sixty-fourth). Taken at the same
+// sample boundary as the voice blocks, because the chip reads the left sample
+// at step 22 and the right at 23. It is the one echo state a restore cannot
+// make from what else the record holds: the eight slots those samples came
+// from are rewritten with the echo's own output a few steps after each is
+// read, so a reimplementation restored without it filters eight samples of
+// silence, writes eight wrong samples back into the buffer, and the feedback
+// carries them round the buffer from there.
+//
+// Version 15 is version 16 with a three hundred and eighty byte snapshot
+// carrying no echo filter history. The recorder stamps 16 only on a recording
+// that carries the snapshot: the snapshot is the one thing the two versions
+// differ in, so a recording without it is byte for byte what version 15
+// wrote and says 15.
 // Version 14 is version 15 with a three hundred and seventy-eight byte
 // snapshot carrying no instruction start, and nought is an address the
 // counter genuinely takes, which is why the version and not the value says
@@ -262,7 +291,7 @@ struct Snapshot {
 // that knows that processor's insides the one place that knows them. (The
 // count said "thirty-two" from version 6 to version 11 while the block grew
 // from forty to fifty; the number is now in one place, below.)
-static constexpr unsigned AudioSnapshotBytes = 380;
+static constexpr unsigned AudioSnapshotBytes = 412;
 
 // The hardware's object table: 128 objects of four bytes - x low, y, tile,
 // attributes - and then two bits an object of x's ninth bit and size, packed
@@ -299,11 +328,50 @@ struct RegisterFile {
     unsigned bank = address >> 16 & 0xff, within = address & 0xffff;
     if(bank >= 0x40 && bank < 0x80) return;
     if(bank >= 0xc0) return;
-    if(within >= 0x2100 && within <= 0x21ff) bytes[within - 0x2100] = value;
-    else if(within >= 0x4200 && within <= 0x43ff) bytes[0x100 + within - 0x4200] = value;
+    if(within >= 0x2100 && within <= 0x21ff) {
+      bytes[within - 0x2100] = value;
+      written[within - 0x2100] = 1;
+    } else if(within >= 0x4200 && within <= 0x43ff) {
+      bytes[0x100 + within - 0x4200] = value;
+      written[0x100 + within - 0x4200] = 1;
+    }
+  }
+
+  // Seed the shadow from a loaded state (BSNES_TRACE_REGS, 2026-09-26).
+  //
+  // A recording that begins at a loaded state used to begin with a shadow that
+  // knew only the stores made since the load: every register the game had set
+  // up before the state was cut read nought until the game happened to write
+  // it again, which for the race's HDMA channels is the next race setup,
+  // thousands of records later. So at the load the emulated machine is asked
+  // what each register holds (System::seedRegistersForTrace), and every byte it
+  // can answer for is put in the shadow as if it had just been stored.
+  //
+  // `known[i]` says whether `values[i]` is an answer. A byte the machine cannot
+  // answer for is left exactly as it was - which, a load coming before the
+  // first instruction runs, is nought, as it always was - so a seeded
+  // recording differs from an unseeded one only in bytes the unseeded one had
+  // no value for yet. Which bytes cannot be answered, and why, is the
+  // comment on System::seedRegistersForTrace, and the seed prints its count
+  // and those bytes as ranges on stderr.
+  //
+  // Only before the recording starts: a load after it (a rewind, run-ahead)
+  // must not move a shadow the recording has already written from.
+  auto seed(const uint8_t* values, const uint8_t* known) -> unsigned {
+    unsigned count = 0;
+    for(unsigned n = 0; n < Bytes; n++) {
+      if(!known[n]) continue;
+      bytes[n] = values[n];
+      count++;
+    }
+    return count;
   }
 
   uint8_t bytes[Bytes] = {};
+  //Which bytes a store has reached since power-on, for the seed check
+  //(BSNES_TRACE_REGS_SEED_CHECK): a byte nothing stored is not a claim the
+  //shadow makes, so a seed is only ever held against a byte that is.
+  uint8_t written[Bytes] = {};
   int state = -1;
 };
 
@@ -459,7 +527,9 @@ private:
     }
 
     uint8_t header[50] = {'F', 'Z', 'T', 'R'};
-    write16(header + 4, 15);
+    //16 only where the snapshot is written: it is all version 16 changed, so a
+    //recording without it is version 15 to the byte and says so.
+    write16(header + 4, apuLen ? 16 : 15);
     write32(header + 6, len);
     write32(header + 10, 0);                // patched by close()
     writeRegisters(header + 14, regs);
@@ -1066,6 +1136,52 @@ private:
   unsigned addresses[128] = {}, count = 0;
 };
 inline auto timingTrace() -> TimingTrace& { static TimingTrace trace; return trace; }
+
+// BSNES_TRACE_PORTS=<csv> (2026-09-26, pinned from fzero-rs's
+// docs/patches/port-trace.patch, audio-parting's scratch instrument): every
+// 65816 store to $2140-$2143 and every audio-processor read of $F4-$F7, each
+// with both processors' clocks, so that a store can be delivered to a
+// reimplementation of the audio side at the machine's own time rather than at
+// the instruction boundary a model of the 65816 puts it on. A record holds the
+// four ports as the 65816 left them at the vblank; this says when, inside the
+// frame, each value arrived and which side of each poll it fell.
+//
+// Rows: kind,frame,master,smp_clocks,skew,port,value,pc
+//   kind w  the 65816's store, after the audio processor was brought up to it
+//   kind r  the audio processor's read, after the 65816 was brought up to it
+//   frame   the record being written (Recorder::recordedFrames), the same
+//           numbering fzero-verify uses
+//   master  counter.cpu, the 65816's master-clock counter (wrapping 32-bit)
+//   smp_clocks  the audio processor's traceClocks (two a cycle), the clock the
+//           audio snapshot's cycle count is taken from
+//   skew    the scheduler's smp.clock: the audio processor's lead over the
+//           65816, in units of 1/(cpu frequency * smp frequency) s
+//   port    0..3; value the byte; pc the store's or the read's instruction
+// Nothing else changes: the RAM trace, its snapshot and the frame hashes are
+// the same with or without it.
+struct PortTrace {
+  auto enabled() -> bool {
+    if(state >= 0) return state == 1;
+    state = 0;
+    auto path = getenv("BSNES_TRACE_PORTS");
+    if(!path) return false;
+    file = fopen(path, "w");
+    if(!file) { fprintf(stderr, "[ports] cannot open output\n"); exit(2); }
+    fprintf(file, "kind,frame,master,smp_clocks,skew,port,value,pc\n");
+    state = 1;
+    return true;
+  }
+  auto note(char kind, unsigned master, unsigned long long smpClocks, long long skew,
+            unsigned port, unsigned value, unsigned pc) -> void {
+    fprintf(file, "%c,%u,%u,%llu,%lld,%u,%u,%06x\n", kind, recorder().recordedFrames(),
+            master, smpClocks, skew, port, value, pc);
+  }
+  ~PortTrace() { if(file) fclose(file); }
+private:
+  FILE* file = nullptr;
+  int state = -1;
+};
+inline auto portTrace() -> PortTrace& { static PortTrace trace; return trace; }
 
 // BSNES_WATCH_READS_BY=039243-039488: what a stretch of code reads.
 inline auto inputWatch() -> WriteWatch& {

@@ -50,6 +50,10 @@ struct SMP : Processor::SPC700, Thread {
   //instruction they describe.
   uint16 traceInstructionPC = 0;
 
+  //BSNES_TRACE_REGS: what the 65816 last stored to port n ($2140 + n), as this
+  //processor holds it for $F4 + n. See System::seedRegistersForTrace.
+  auto cpuPortForTrace(uint n) const -> uint8;
+
 private:
   struct IO {
     //timing

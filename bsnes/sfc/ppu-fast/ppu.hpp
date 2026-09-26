@@ -15,6 +15,12 @@ struct PPU : PPUcounter {
   //The object table for the recorder: readObject() is the core's own
   //reconstruction of a hardware byte from its decoded objects, so a table
   //built from it is the table the CPU would read back at $2138.
+  //BSNES_TRACE_REGS: the B-bus registers this core can say it holds, as the
+  //bytes a store would have put there, at a state load. See
+  //System::seedRegistersForTrace; defined in io.cpp beside the writes it
+  //inverts.
+  auto registersForTrace(uint8* values, uint8* known) const -> void;
+
   auto oamForTrace(uint8* out) -> void {
     for(uint n = 0; n < 544; n++) out[n] = readObject(n);
   }

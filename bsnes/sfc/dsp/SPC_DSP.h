@@ -315,6 +315,15 @@ public:
     //is eight instants and not one.
     int traceCarried = 0;
     int carriedForTrace() const { return traceCarried; }
+    //The echo filter's memory (trace v16): the eight samples a channel the
+    //FIR has read out of the echo buffer, as the chip holds them (each already
+    //halved, which is how the filter keeps them). `n` runs 1..8, oldest first,
+    //and is meant to be asked at a sample boundary: there `echo_hist_pos [0]`
+    //(which is `[8]`, the second copy) is the newest and `[1]` the oldest, and
+    //the next sample's step 22 overwrites `[1]` after moving on by one. The
+    //slots those samples were read from have been rewritten with the echo's
+    //own output since, so audio RAM cannot give them back.
+    int echoHistoryForTrace(int n, int ch) const { return m.echo_hist_pos [n] [ch]; }
     void clearCarriedForTrace() { traceCarried = 0; }
 };
 

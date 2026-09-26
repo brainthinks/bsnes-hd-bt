@@ -32,18 +32,30 @@ auto SMP::readIO(uint16 address) -> uint8 {
 
   case 0xf4:  //CPUIO0
     synchronizeCPU();
+    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
+    if(RamTrace::portTrace().enabled())
+      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 0, io.apu0, traceInstructionPC);
     return io.apu0;
 
   case 0xf5:  //CPUIO1
     synchronizeCPU();
+    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
+    if(RamTrace::portTrace().enabled())
+      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 1, io.apu1, traceInstructionPC);
     return io.apu1;
 
   case 0xf6:  //CPUIO2
     synchronizeCPU();
+    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
+    if(RamTrace::portTrace().enabled())
+      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 2, io.apu2, traceInstructionPC);
     return io.apu2;
 
   case 0xf7:  //CPUIO3
     synchronizeCPU();
+    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
+    if(RamTrace::portTrace().enabled())
+      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 3, io.apu3, traceInstructionPC);
     return io.apu3;
 
   case 0xf8:  //AUXIO4

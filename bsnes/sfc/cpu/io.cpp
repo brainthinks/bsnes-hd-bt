@@ -104,6 +104,9 @@ auto CPU::writeRAM(uint addr, uint8 data) -> void {
 
 auto CPU::writeAPU(uint addr, uint8 data) -> void {
   synchronizeSMP();
+  //BSNES_TRACE_PORTS: the store, after the audio processor was brought up to it
+  if(RamTrace::portTrace().enabled())
+    RamTrace::portTrace().note('w', counter.cpu, smp.traceClocks, smp.clock, addr & 3, data, r.pc.d);
   return smp.portWrite(addr & 3, data);
 }
 

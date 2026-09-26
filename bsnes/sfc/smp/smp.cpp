@@ -228,6 +228,22 @@ auto SMP::snapshotForTrace(uint8* out) -> void {
   //It needs no opcode-length table here and none there.
   out[378] = traceInstructionPC & 0xff;
   out[379] = traceInstructionPC >> 8 & 0xff;
+
+  //And the echo filter's memory (trace v16): the eight samples a channel the
+  //FIR last read out of the echo buffer, oldest first, each as a left and a
+  //right int16 -- as the chip holds them, already halved. Taken at the same
+  //boundary as the voice blocks above (DSP::captureVoicesForTrace), because
+  //the chip reads the left sample at step 22 and the right at 23 and a history
+  //read here could be two instants. Nothing else in the record can give them
+  //back: the slots they were read from are rewritten with the echo's own
+  //output a few steps later, so a restore that starts the filter from silence
+  //makes eight wrong samples of echo and writes them into the buffer, where
+  //the feedback carries them round again.
+  memcpy(out + 380, dsp.echoHistoryForTrace(), 32);
+}
+
+auto SMP::cpuPortForTrace(uint n) const -> uint8 {
+  return n == 0 ? io.apu0 : n == 1 ? io.apu1 : n == 2 ? io.apu2 : io.apu3;
 }
 
 auto SMP::power(bool reset) -> void {

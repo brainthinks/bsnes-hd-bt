@@ -15,6 +15,13 @@ struct System {
   auto runToSaveStrict() -> void;
   auto frameEvent() -> void;
 
+  //BSNES_TRACE_REGS: the register file as the loaded machine holds it, put
+  //into the recorder's shadow at a state load; and the check that holds that
+  //reading against the shadow on a cold run. system.cpp says what is read.
+  auto registersForTrace(uint8* values, uint8* known) -> bool;
+  auto seedRegistersForTrace() -> void;
+  auto checkRegisterSeedForTrace() -> void;
+
   auto load(Emulator::Interface*) -> bool;
   auto save() -> void;
   auto unload() -> void;

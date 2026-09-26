@@ -208,6 +208,12 @@ auto PPU::oamForTrace(uint8* out) -> void {
   for(uint n = 0; n < 544; n++) out[n] = obj.oam.read(n);
 }
 
+auto PPU::registersForTrace(uint8* values, uint8* known) -> bool {
+  if(system.hdPPU() || !system.fastPPU()) return false;
+  ppufast.registersForTrace(values, known);
+  return true;
+}
+
 auto PPU::refresh() -> void {
   if(system.hdPPU()) {
     return ppuhd.refresh();

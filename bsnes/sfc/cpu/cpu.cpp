@@ -161,4 +161,73 @@ auto CPU::power(bool reset) -> void {
   status.interruptPending = 1;
 }
 
+
+//BSNES_TRACE_REGS (2026-09-26): $4200-$43FF at a state load, as the bytes a
+//store would have put there, and - because a transfer writes the B bus the way
+//a store does - every B-bus register a channel pointed from A to B could have
+//written last is withdrawn from `known`. See System::seedRegistersForTrace for
+//what each register is and why the ones left out are.
+auto CPU::registersForTrace(uint8* values, uint8* known) const -> void {
+  auto set = [&](uint address, uint value) {
+    values[0x100 + address - 0x4200] = value;
+    known[0x100 + address - 0x4200] = 1;
+  };
+  set(0x4200, io.nmiEnable << 7 | io.virqEnable << 5 | io.hirqEnable << 4 | io.autoJoypadPoll << 0);
+  set(0x4201, io.pio);
+  set(0x4202, io.wrmpya);
+  set(0x4203, io.wrmpyb);
+  set(0x4204, io.wrdiva >> 0 & 0xff);
+  set(0x4205, io.wrdiva >> 8 & 0xff);
+  set(0x4206, io.wrdivb);
+  {
+    uint htime = ((io.htime >> 2) - 1) & 0x1ff;
+    set(0x4207, htime & 0xff);
+    set(0x4208, htime >> 8 & 1);
+  }
+  set(0x4209, io.vtime & 0xff);
+  set(0x420a, io.vtime >> 8 & 1);
+  {
+    uint enabled = 0;
+    for(uint n : range(8)) enabled |= channels[n].hdmaEnable << n;
+    set(0x420c, enabled);
+  }
+  set(0x420d, io.fastROM);
+  for(uint n : range(8)) {
+    auto& channel = channels[n];
+    uint base = 0x4300 + n * 0x10;
+    set(base + 0x0, channel.transferMode << 0 | channel.fixedTransfer << 3
+                  | channel.reverseTransfer << 4 | channel.unused << 5
+                  | channel.indirect << 6 | channel.direction << 7);
+    set(base + 0x1, channel.targetAddress);
+    set(base + 0x4, channel.sourceBank);
+    set(base + 0x7, channel.indirectBank);
+    set(base + 0xb, channel.unknown);
+    set(base + 0xf, channel.unknown);
+    //A general transfer walks the source address on and counts the size down
+    //to nought; a channel HDMA is using does neither (indirect HDMA reloads
+    //the size, which is its indirect address). So these are the stores only
+    //on a channel HDMA owns, and only the size of a direct one.
+    if(channel.hdmaEnable) {
+      set(base + 0x2, channel.sourceAddress >> 0 & 0xff);
+      set(base + 0x3, channel.sourceAddress >> 8 & 0xff);
+      if(!channel.indirect) {
+        set(base + 0x5, channel.transferSize >> 0 & 0xff);
+        set(base + 0x6, channel.transferSize >> 8 & 0xff);
+      }
+    }
+    //Every register a channel pointed from A to B writes holds the channel's
+    //byte, not a store, whenever the channel wrote it last.
+    if(channel.direction == 0) {
+      static const uint8 offsets[8][4] = {
+        {0, 0, 0, 0}, {0, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 1, 1},
+        {0, 1, 2, 3}, {0, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 1, 1},
+      };
+      for(uint k : range(4)) {
+        uint b = (channel.targetAddress + offsets[channel.transferMode][k]) & 0xff;
+        known[b] = 0;
+      }
+    }
+  }
+}
+
 }

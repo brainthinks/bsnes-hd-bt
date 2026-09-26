@@ -65,6 +65,14 @@ struct DSP {
   //the sample in flight for itself, exactly as this one is doing.
   auto captureVoicesForTrace() -> void;
   auto voiceBlocksForTrace() const -> const uint8* { return traceVoiceBlocks; }
+  //BSNES_TRACE_APU (trace v16): the echo filter's history, kept at the same
+  //boundary as the voice blocks and for the same reason -- the chip reads one
+  //channel's sample at step 22 and the other's at 23, so a history read off it
+  //inside a sample can be two instants. Thirty-two bytes: eight samples,
+  //oldest first, each a left and a right int16, little-endian.
+  auto echoHistoryForTrace() const -> const uint8* { return traceEchoHistory; }
+  static constexpr uint EchoHistoryBytes = 32;
+  uint8 traceEchoHistory[EchoHistoryBytes] = {};
   //And which voices the chip has carried since that boundary, one bit a
   //voice, so the version 12 split can be read out of a version 13 recording
   //rather than inferred from the step number.

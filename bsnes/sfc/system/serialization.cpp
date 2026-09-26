@@ -55,6 +55,11 @@ auto System::unserialize(serializer& s) -> bool {
 
   if(synchronize) power(/* reset = */ false);
   serializeAll(s, synchronize);
+  //BSNES_TRACE_REGS: a recording that begins at this state begins with the
+  //registers the state holds, not an empty shadow. Only before the recording
+  //starts: a later load (a rewind, run-ahead) must not move a shadow the
+  //recording is already writing deltas from.
+  if(RamTrace::tracingRegisters() && !RamTrace::recorder().recording()) seedRegistersForTrace();
   return true;
 }
 

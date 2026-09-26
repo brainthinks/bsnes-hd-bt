@@ -76,6 +76,14 @@ struct CPU : Processor::WDC65816, Thread, PPUcounter {
     uint target = 0;
   } overclocking;
 
+  //BSNES_TRACE_PORTS: the master counter, read from the audio processor's side.
+  auto traceMasterCounter() const -> uint { return counter.cpu; }
+
+  //BSNES_TRACE_REGS: this processor's share of the register file at a state
+  //load ($4200-$43FF), and which B-bus registers a DMA channel may have written
+  //last. See System::seedRegistersForTrace.
+  auto registersForTrace(uint8* values, uint8* known) const -> void;
+
 private:
   uint version = 2;  //allowed: 1, 2
 

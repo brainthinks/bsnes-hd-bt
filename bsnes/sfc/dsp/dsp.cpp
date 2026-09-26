@@ -164,6 +164,15 @@ auto DSP::captureVoicesForTrace() -> void {
       b[17 + n * 2] = sample >> 8 & 0xff;
     }
   }
+  //And the echo filter's eight samples a channel (trace v16), at the same
+  //boundary: oldest first, left then right, as the chip holds them.
+  for(uint n : range(8)) {
+    for(uint ch : range(2)) {
+      uint sample = (uint)spc_dsp.echoHistoryForTrace(1 + n, ch);
+      traceEchoHistory[n * 4 + ch * 2 + 0] = sample & 0xff;
+      traceEchoHistory[n * 4 + ch * 2 + 1] = sample >> 8 & 0xff;
+    }
+  }
   //A new sample, so nothing has been carried into it yet. The chip sets the
   //bits itself as each voice's step runs.
   spc_dsp.clearCarriedForTrace();

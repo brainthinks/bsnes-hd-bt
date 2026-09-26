@@ -13,6 +13,11 @@ struct PPU : Thread, PPUcounter {
   //Which core is running is a runtime setting, so this too is in ppu.cpp.
   auto oamForTrace(uint8* out) -> void;
 
+  //BSNES_TRACE_REGS: the B-bus registers at a state load, from the core that
+  //is running (System::seedRegistersForTrace). Only the fast core is taught
+  //it; the others answer for nothing and say so, returning false.
+  auto registersForTrace(uint8* values, uint8* known) -> bool;
+
   alwaysinline auto interlace() const -> bool { return display.interlace; }
   alwaysinline auto overscan() const -> bool { return display.overscan; }
   alwaysinline auto vdisp() const -> uint { return display.vdisp; }
