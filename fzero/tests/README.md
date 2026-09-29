@@ -1,0 +1,1 @@
+test_recorder.cpp: the paired-entry trigger test (BSNES_TRACE_RAM_PAIRED), moved here from fzero-rs tools/ on 2026-09-29 because it includes this fork's GPL-3.0 source; build with bsnes/emulator on the include path, run with no argument for the legacy/paired cases and with one to assert the repeated-entry failure (exit 1).
