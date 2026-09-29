@@ -42,7 +42,7 @@ Every integer is little-endian.
 **hello** (emulator to program, once, on connecting):
 
     magic     8   "FZLIVE" 0x1a 0x00
-    version   4   1
+    version   4   2 (1 before commit 70bbada5)
     lead      4   2
     domains   1   7
     lengths   4 x 7, in domain order
@@ -57,12 +57,14 @@ Every integer is little-endian.
 
 **replies** (emulator to program):
 
-    'S' frame:u32 present:u8 hash:32 x 7
+    'S' frame:u32 present:u8 hash:32 x 7 audio_cycle:u64
                     after an 'F': the frame counter the frame ran as, which
-                    domains the capture holds (bit n for domain n), and the
-                    SHA-256 of each (zeroes for an absent one). `present` is
-                    nought when the frame event never came, which the other
-                    end refuses.
+                    domains the capture holds (bit n for domain n), the
+                    SHA-256 of each (zeroes for an absent one), and (version
+                    2) the audio processor's cycle count at the capture.
+                    `present` is nought when the frame event never came,
+                    which the other end refuses; `audio_cycle` is then
+                    nought too. Version 1's 'S' ends after the hashes.
     'B' mask:u8 bytes...
                     after a 'D': the domains of `mask` that are present, each
                     whole, in domain order.
@@ -82,6 +84,20 @@ Every integer is little-endian.
 The two audio domains are present only where the sound chip is run as the
 hardware runs it - the DSP's `Fast: false`, echo writes reaching audio RAM -
 which is `BSNES_TRACE_APU`'s own condition.
+
+## The audio cycle (version 2)
+
+`audio_cycle` is the audio processor's cycles since power-on at the instant
+the capture was taken: its clock count over two, the same count a
+`BSNES_TRACE_APU` record carries in bytes 32-39 of its snapshot. The
+emulator runs the audio processor as its own thread, synchronised to the
+CPU only when the two talk or the scheduler says so, so at a frame event it
+stands wherever it last stopped - ahead of or behind the record point by a
+varying amount. The two audio domains are its RAM and chip registers at that
+cycle, and the other end can only hold them by taking its own on the same
+cycle, which this field names. Added in commit 70bbada5 (fzero-rs item
+live-audio); the video and work-RAM domains and every recording are
+unchanged.
 
 ## Why a socket and hashes
 
