@@ -117,3 +117,12 @@ from a slot, `machine-1` cold) are byte-identical before and after, and so is
 a cold `machine-1` of 1,200 frames carrying every domain the recorder has
 (work RAM, video memory, the object table, the register shadow, the battery
 and audio): the mode is inert unless `BSNES_LIVE` is set.
+
+Rebuilt again 2026-09-29 for protocol version 2 (commit 70bbada5), under the
+same control: `a63783012b9cd350` → **`7e3bde85034aafe9`** (sha256
+`7e3bde85034aafe9998f93f30e7099999db4c223c9b3087f1d247a4bce244137`). The
+control's `fzero-slot3` and `machine-1` are the same run (`same-run`: every
+field on every frame), their picture hashes and maps byte-identical, and a
+1,200-frame cold `machine-1` carrying work RAM, video memory, the object
+table, the register shadow, the battery and audio is byte-identical before
+and after.
