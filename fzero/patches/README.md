@@ -16,5 +16,6 @@ patch.
 | fetch-address.patch | v15 | 440c953c |
 | port-trace.patch | v16 (BSNES_TRACE_PORTS) | 1c2d9449 |
 | recorder-v16.patch | v16 | 1c2d9449 |
+| live-mode.patch | v16 (BSNES_LIVE, see ../LIVE.md) | be6c0552 |
 
 Moved from fzero-rs `docs/patches/` on 2026-09-29.

@@ -1,0 +1,433 @@
+From be6c055256547e79851799f65d1865dc47b06ca6 Mon Sep 17 00:00:00 2001
+From: Brian Andress <2215066+brainthinks@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 01:54:05 -0500
+Subject: [PATCH] BSNES_LIVE: lockstep with a comparing program over a Unix
+ socket (fzero-rs compare mode)
+
+What changed and why (fzero-rs item compare-bsnes, the owner's request of
+2026-09-29 for a zelda3-style compare mode against this recorder):
+
+- emulator/live.hpp (new): with BSNES_LIVE=<socket> the emulator connects,
+  says hello (protocol 1, lead 2, seven domain lengths), runs frame 1 on its
+  own, and from frame 2 runs one frame per 'F' request holding its pad,
+  answering 'S' with the frame counter and the SHA-256 of work RAM, video
+  memory, colour memory, the object table, the register shadow, audio RAM
+  and the DSP registers; 'D' sends the last frame's bytes of a mask of
+  domains; 'Q' or EOF quits. fzero/LIVE.md is the protocol.
+- sfc/system/system.cpp: System::frameEvent captures those domains at the
+  instant BSNES_TRACE_RAM observes (after the poke), when the mode is on.
+- target-bsnes/program/program.cpp: the frame loop waits for the pad and
+  answers after the frame; refuses run-ahead.
+- emulator/hdtrace.hpp: the pad replaces any script while the mode is on.
+- emulator/ramtrace.hpp: the register shadow is kept under BSNES_LIVE as
+  under BSNES_TRACE_REGS.
+- sfc/ppu{,-fast,-hd}: cgramForTrace, colour memory from the running core.
+
+Every addition is inert unless BSNES_LIVE is set: every existing recording
+reproduces byte for byte (fzero-rs tools/recorder_rebuild_control.sh).
+---
+ bsnes/emulator/hdtrace.hpp             |  14 ++
+ bsnes/emulator/live.hpp                | 217 +++++++++++++++++++++++++
+ bsnes/emulator/ramtrace.hpp            |   3 +-
+ bsnes/sfc/ppu-fast/ppu.hpp             |   5 +
+ bsnes/sfc/ppu-hd/ppu.hpp               |   5 +
+ bsnes/sfc/ppu/ppu.cpp                  |   9 +
+ bsnes/sfc/ppu/ppu.hpp                  |   4 +
+ bsnes/sfc/system/system.cpp            |  12 ++
+ bsnes/target-bsnes/program/program.cpp |  15 ++
+ 9 files changed, 283 insertions(+), 1 deletion(-)
+ create mode 100644 bsnes/emulator/live.hpp
+
+diff --git a/bsnes/emulator/hdtrace.hpp b/bsnes/emulator/hdtrace.hpp
+index c0850451..d26bee83 100644
+--- a/bsnes/emulator/hdtrace.hpp
++++ b/bsnes/emulator/hdtrace.hpp
+@@ -107,8 +107,22 @@ namespace HdTrace {
+     return remembered;
+   }
+ 
++  //BSNES_LIVE (emulator/live.hpp): the pad the frame running now holds, sent by
++  //the program comparing itself against this machine, in the script file's
++  //bit order. It takes the place of any script while the mode is on.
++  inline auto live() -> bool {
++    static int on = -1;
++    if(on < 0) { auto p = getenv("BSNES_LIVE"); on = p && *p ? 1 : 0; }
++    return on == 1;
++  }
++  inline auto livePad() -> unsigned& {
++    static unsigned held = 0;
++    return held;
++  }
++
+   //-1: no script, leave input to the hardware. 0/1: scripted button state.
+   inline auto scriptedInput(unsigned input) -> int {
++    if(live()) return input < 12 && (livePad() >> input & 1) ? 1 : 0;
+     if(auto frames = scriptFile()) {
+       unsigned held = 0;
+       long at = (long)frame();
+diff --git a/bsnes/emulator/live.hpp b/bsnes/emulator/live.hpp
+new file mode 100644
+index 00000000..a33ed34d
+--- /dev/null
++++ b/bsnes/emulator/live.hpp
+@@ -0,0 +1,217 @@
++#pragma once
++
++//BSNES_LIVE=<path of a Unix socket>: run in lockstep with a program comparing
++//itself against this machine (fzero-rs's compare mode). Inert unless set; with
++//it unset nothing here runs and no recording changes.
++//
++//The whole protocol is written up in fzero/LIVE.md. In short: the emulator
++//connects to the socket, says hello, runs its first frame (the lead's second
++//entry, nothing held) on its own, and from then on runs one frame per 'F'
++//request with the pad the request carries, answering each with the SHA-256 of
++//every domain as it stood when that frame's record would have been taken
++//(System::frameEvent, the same instant BSNES_TRACE_RAM observes). A 'D'
++//request asks for the bytes of the last frame's domains; 'Q' or the socket
++//closing ends the run.
++
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
++#include <errno.h>
++
++#include <nall/hash/sha256.hpp>
++#include <emulator/hdtrace.hpp>
++
++namespace Live {
++
++  //The domains, in the protocol's order; their bit in a mask is their index.
++  enum Domain : unsigned { Ram, Vram, Cgram, Oam, Regs, ApuRam, Dsp, Domains };
++  static constexpr unsigned Lengths[Domains] = {
++    0x20000,  //work RAM, $7E:0000-$7F:FFFF
++    0x10000,  //video memory, words low byte first
++    512,      //colour memory, colours low byte first
++    544,      //the object table as $2138 reads it back
++    0x300,    //the register shadow: $2100-$21FF then $4200-$43FF
++    0x10000,  //the audio processor's RAM
++    128,      //the sound chip's registers
++  };
++  static constexpr unsigned Version = 1;
++  static constexpr unsigned Lead = 2;
++
++  struct State {
++    int fd = -1;
++    bool failed = false;
++    //the frame the last capture was taken on, and which domains it holds
++    unsigned capturedFrame = 0;
++    unsigned present = 0;
++    bool captured = false;
++    uint8_t* bytes[Domains] = {};
++  };
++
++  inline auto state() -> State& {
++    static State s;
++    return s;
++  }
++
++  inline auto path() -> const char* { return getenv("BSNES_LIVE"); }
++
++  inline auto enabled() -> bool { return HdTrace::live(); }
++
++  inline auto fail(const char* what) -> void {
++    auto& s = state();
++    if(!s.failed) fprintf(stderr, "BSNES_LIVE: %s (%s)\n", what, errno ? strerror(errno) : "no error number");
++    s.failed = true;
++    if(s.fd >= 0) close(s.fd);
++    s.fd = -1;
++  }
++
++  inline auto sendAll(const void* data, size_t length) -> bool {
++    auto& s = state();
++    auto p = (const uint8_t*)data;
++    while(length) {
++      ssize_t n = send(s.fd, p, length, MSG_NOSIGNAL);
++      if(n < 0 && errno == EINTR) continue;
++      if(n <= 0) { fail("send"); return false; }
++      p += n; length -= (size_t)n;
++    }
++    return true;
++  }
++
++  inline auto recvAll(void* data, size_t length) -> bool {
++    auto& s = state();
++    auto p = (uint8_t*)data;
++    while(length) {
++      ssize_t n = recv(s.fd, p, length, 0);
++      if(n < 0 && errno == EINTR) continue;
++      if(n == 0) { errno = 0; fail("the other end closed the socket"); return false; }
++      if(n < 0) { fail("recv"); return false; }
++      p += n; length -= (size_t)n;
++    }
++    return true;
++  }
++
++  inline auto put32(uint8_t* p, uint32_t v) -> void {
++    p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
++  }
++
++  //Connect and say hello, once.
++  inline auto connectOnce() -> bool {
++    auto& s = state();
++    if(s.fd >= 0) return true;
++    if(s.failed) return false;
++    s.fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if(s.fd < 0) { fail("socket"); return false; }
++    sockaddr_un address{};
++    address.sun_family = AF_UNIX;
++    if(strlen(path()) >= sizeof(address.sun_path)) { errno = ENAMETOOLONG; fail("the socket path is too long"); return false; }
++    strcpy(address.sun_path, path());
++    if(connect(s.fd, (sockaddr*)&address, sizeof(address)) != 0) { fail("connect"); return false; }
++    for(unsigned d = 0; d < Domains; d++) s.bytes[d] = new uint8_t[Lengths[d]]();
++    //hello: magic, version, lead, domain count, each domain's length
++    uint8_t hello[8 + 4 + 4 + 1 + 4 * Domains] = {'F', 'Z', 'L', 'I', 'V', 'E', 0x1a, 0};
++    put32(hello + 8, Version);
++    put32(hello + 12, Lead);
++    hello[16] = Domains;
++    for(unsigned d = 0; d < Domains; d++) put32(hello + 17 + 4 * d, Lengths[d]);
++    return sendAll(hello, sizeof(hello));
++  }
++
++  //The pad the running frame holds, in the script file's bit order (the
++  //gamepad enum's: up down left right b a y x l r select start from bit 0).
++  inline auto pad() -> unsigned& { return HdTrace::livePad(); }
++
++  //System::frameEvent: take the frame's state at the instant a record is
++  //taken. The arguments are the recorder's own, plus colour memory.
++  inline auto capture(const uint8_t* ram, const uint16_t* video, const uint8_t* colours,
++                      const uint8_t* objects, const uint8_t* registers,
++                      const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest) -> void {
++    auto& s = state();
++    if(s.fd < 0) return;
++    s.present = 0;
++    memcpy(s.bytes[Ram], ram, Lengths[Ram]);
++    s.present |= 1 << Ram;
++    if(video) {
++      for(unsigned n = 0; n < Lengths[Vram] / 2; n++) {
++        s.bytes[Vram][n * 2] = video[n] & 0xff;
++        s.bytes[Vram][n * 2 + 1] = video[n] >> 8;
++      }
++      s.present |= 1 << Vram;
++    }
++    if(colours) { memcpy(s.bytes[Cgram], colours, Lengths[Cgram]); s.present |= 1 << Cgram; }
++    if(objects) { memcpy(s.bytes[Oam], objects, Lengths[Oam]); s.present |= 1 << Oam; }
++    if(registers) { memcpy(s.bytes[Regs], registers, Lengths[Regs]); s.present |= 1 << Regs; }
++    //The audio domains only where the sound chip runs as the hardware does,
++    //the recorder's own condition for BSNES_TRACE_APU.
++    if(apu && dspRegs && audioIsHonest) {
++      memcpy(s.bytes[ApuRam], apu, Lengths[ApuRam]);
++      memcpy(s.bytes[Dsp], dspRegs, Lengths[Dsp]);
++      s.present |= 1 << ApuRam | 1 << Dsp;
++    }
++    s.capturedFrame = HdTrace::frame();
++    s.captured = true;
++  }
++
++  //Before the frame the counter now names runs: during the lead nothing is
++  //held and nothing is asked; after it, answer 'D' requests about the last
++  //frame until an 'F' names this one's pad. False ends the run.
++  inline auto beforeFrame(unsigned frame) -> bool {
++    auto& s = state();
++    if(!connectOnce()) return false;
++    s.captured = false;
++    if(frame < Lead) { pad() = 0; return true; }
++    while(true) {
++      uint8_t op;
++      if(!recvAll(&op, 1)) return false;
++      if(op == 'F') {
++        uint8_t p[2];
++        if(!recvAll(p, 2)) return false;
++        pad() = p[0] | p[1] << 8;
++        return true;
++      }
++      if(op == 'D') {
++        uint8_t mask;
++        if(!recvAll(&mask, 1)) return false;
++        mask &= s.present;
++        uint8_t head[2] = {'B', mask};
++        if(!sendAll(head, 2)) return false;
++        for(unsigned d = 0; d < Domains; d++) {
++          if(mask >> d & 1 && !sendAll(s.bytes[d], Lengths[d])) return false;
++        }
++        continue;
++      }
++      if(op == 'Q') {
++        close(s.fd);
++        s.fd = -1;
++        return false;
++      }
++      errno = 0;
++      fail("an unknown request");
++      return false;
++    }
++  }
++
++  //After the frame has run: its hashes, from the capture frameEvent took.
++  inline auto afterFrame(unsigned frame) -> bool {
++    auto& s = state();
++    if(frame < Lead) return true;
++    if(s.fd < 0) return false;
++    uint8_t reply[1 + 4 + 1 + 32 * Domains] = {'S'};
++    put32(reply + 1, frame);
++    //No capture this frame (the frame event never came) is said as no domain
++    //at all, and the other end refuses.
++    unsigned present = s.captured && s.capturedFrame == frame ? s.present : 0;
++    reply[5] = present;
++    for(unsigned d = 0; d < Domains; d++) {
++      if(!(present >> d & 1)) continue;
++      nall::Hash::SHA256 hash({s.bytes[d], Lengths[d]});
++      auto digest = hash.output();
++      for(unsigned n = 0; n < 32; n++) reply[6 + 32 * d + n] = digest[n];
++    }
++    return sendAll(reply, sizeof(reply));
++  }
++
++}
+diff --git a/bsnes/emulator/ramtrace.hpp b/bsnes/emulator/ramtrace.hpp
+index cd9a4bdb..6789ce4d 100644
+--- a/bsnes/emulator/ramtrace.hpp
++++ b/bsnes/emulator/ramtrace.hpp
+@@ -317,7 +317,8 @@ struct RegisterFile {
+   static constexpr unsigned Bytes = 0x300;
+ 
+   auto enabled() -> bool {
+-    if(state < 0) state = getenv("BSNES_TRACE_REGS") ? 1 : 0;
++    //BSNES_LIVE compares this shadow too, so it keeps one without the flag.
++    if(state < 0) state = getenv("BSNES_TRACE_REGS") || getenv("BSNES_LIVE") ? 1 : 0;
+     return state == 1;
+   }
+ 
+diff --git a/bsnes/sfc/ppu-fast/ppu.hpp b/bsnes/sfc/ppu-fast/ppu.hpp
+index 8cef1d20..e4ebd673 100644
+--- a/bsnes/sfc/ppu-fast/ppu.hpp
++++ b/bsnes/sfc/ppu-fast/ppu.hpp
+@@ -25,6 +25,11 @@ struct PPU : PPUcounter {
+     for(uint n = 0; n < 544; n++) out[n] = readObject(n);
+   }
+ 
++  //BSNES_LIVE: colour memory, 256 colours low byte first.
++  auto cgramForTrace(uint8* out) const -> void {
++    for(uint n = 0; n < 256; n++) out[n * 2] = cgram[n] & 0xff, out[n * 2 + 1] = cgram[n] >> 8;
++  }
++
+   alwaysinline auto interlace() const -> bool;
+   alwaysinline auto overscan() const -> bool;
+   alwaysinline auto vdisp() const -> uint;
+diff --git a/bsnes/sfc/ppu-hd/ppu.hpp b/bsnes/sfc/ppu-hd/ppu.hpp
+index 6f065dc9..1dbf81a1 100644
+--- a/bsnes/sfc/ppu-hd/ppu.hpp
++++ b/bsnes/sfc/ppu-hd/ppu.hpp
+@@ -56,6 +56,11 @@ struct PPU : PPUcounter {
+     for(uint n = 0; n < 544; n++) out[n] = readObject(n);
+   }
+ 
++  //BSNES_LIVE: colour memory, 256 colours low byte first.
++  auto cgramForTrace(uint8* out) const -> void {
++    for(uint n = 0; n < 256; n++) out[n * 2] = cgram[n] & 0xff, out[n * 2 + 1] = cgram[n] >> 8;
++  }
++
+   //serialization.cpp
+   auto serialize(serializer&) -> void;
+ 
+diff --git a/bsnes/sfc/ppu/ppu.cpp b/bsnes/sfc/ppu/ppu.cpp
+index 91eddec0..5640af4a 100644
+--- a/bsnes/sfc/ppu/ppu.cpp
++++ b/bsnes/sfc/ppu/ppu.cpp
+@@ -208,6 +208,15 @@ auto PPU::oamForTrace(uint8* out) -> void {
+   for(uint n = 0; n < 544; n++) out[n] = obj.oam.read(n);
+ }
+ 
++auto PPU::cgramForTrace(uint8* out) -> void {
++  if(system.hdPPU()) { ppuhd.cgramForTrace(out); return; }
++  if(system.fastPPU()) { ppufast.cgramForTrace(out); return; }
++  for(uint n = 0; n < 256; n++) {
++    out[n * 2 + 0] = screen.cgram[n] >> 0 & 0xff;
++    out[n * 2 + 1] = screen.cgram[n] >> 8 & 0xff;
++  }
++}
++
+ auto PPU::registersForTrace(uint8* values, uint8* known) -> bool {
+   if(system.hdPPU() || !system.fastPPU()) return false;
+   ppufast.registersForTrace(values, known);
+diff --git a/bsnes/sfc/ppu/ppu.hpp b/bsnes/sfc/ppu/ppu.hpp
+index 3394970e..1f9aa82d 100644
+--- a/bsnes/sfc/ppu/ppu.hpp
++++ b/bsnes/sfc/ppu/ppu.hpp
+@@ -13,6 +13,10 @@ struct PPU : Thread, PPUcounter {
+   //Which core is running is a runtime setting, so this too is in ppu.cpp.
+   auto oamForTrace(uint8* out) -> void;
+ 
++  //And colour memory, for BSNES_LIVE: 256 colours, each low byte first, from
++  //the core that is running. Defined in ppu.cpp for the same reason.
++  auto cgramForTrace(uint8* out) -> void;
++
+   //BSNES_TRACE_REGS: the B-bus registers at a state load, from the core that
+   //is running (System::seedRegistersForTrace). Only the fast core is taught
+   //it; the others answer for nothing and say so, returning false.
+diff --git a/bsnes/sfc/system/system.cpp b/bsnes/sfc/system/system.cpp
+index 3a5683a8..e42b31e7 100644
+--- a/bsnes/sfc/system/system.cpp
++++ b/bsnes/sfc/system/system.cpp
+@@ -1,4 +1,5 @@
+ #include <emulator/ramtrace.hpp>
++#include <emulator/live.hpp>
+ #include <sfc/sfc.hpp>
+ 
+ namespace SuperFamicom {
+@@ -132,6 +133,17 @@ auto System::frameEvent() -> void {
+                                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
+                                  audioRegs, oam);
+   }
++  //BSNES_LIVE: the same instant, for the program comparing itself against
++  //this machine (emulator/live.hpp); inert unless set.
++  if(Live::enabled()) {
++    uint8 oam[RamTrace::ObjectBytes];
++    ppu.oamForTrace(oam);
++    uint8 colours[512];
++    ppu.cgramForTrace(colours);
++    Live::capture(cpu.wram, ppu.vramForTrace(), colours, oam, RamTrace::registerFile().bytes,
++                  dsp.apuramForTrace(), dsp.registersForTrace(),
++                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep());
++  }
+ 
+   //refresh all cheat codes once per frame
+   Memory::GlobalWriteEnable = true;
+diff --git a/bsnes/target-bsnes/program/program.cpp b/bsnes/target-bsnes/program/program.cpp
+index e8e74876..3169f496 100644
+--- a/bsnes/target-bsnes/program/program.cpp
++++ b/bsnes/target-bsnes/program/program.cpp
+@@ -1,4 +1,5 @@
+ #include "../bsnes.hpp"
++#include <emulator/live.hpp>
+ #include "platform.cpp"
+ #include "game.cpp"
+ #include "game-pak.cpp"
+@@ -132,6 +133,20 @@ auto Program::main() -> void {
+   }
+   if(auto limit = HdTrace::quitAfter(); limit && HdTrace::frame() > limit) return program.quit();
+ 
++  //BSNES_LIVE: wait for the pad of the frame the counter now names (after the
++  //lead), and answer for it once it has run. Run-ahead would run a frame more
++  //than once, so the mode refuses it. Inert unless set.
++  if(Live::enabled()) {
++    if(settings.emulator.runAhead.frames) {
++      fprintf(stderr, "BSNES_LIVE: refusing, run-ahead is on (Emulator/RunAhead/Frames)\n");
++      return program.quit();
++    }
++    if(!Live::beforeFrame(HdTrace::frame())) return program.quit();
++    emulator->run();
++    if(!Live::afterFrame(HdTrace::frame())) return program.quit();
++    return;
++  }
++
+   //BSNES_TIME_FRAME=1: where the wall clock goes, for measurement runs
+   static uint64 runNs = 0, loopNs = 0, lastEnd = 0;
+   bool timing = HdTrace::timing();
+-- 
+2.43.0
+
