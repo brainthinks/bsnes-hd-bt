@@ -1,0 +1,144 @@
+--- a/bsnes/emulator/ramtrace.hpp
++++ b/bsnes/emulator/ramtrace.hpp
+@@ -50,7 +50,7 @@
+ //
+ // Format, little-endian, matching the reader in the fzero-rs project:
+ //   char   magic[4]     "FZTR"
+-//   uint16 version      9
++//   uint16 version      10
+ //   uint32 ram_len      0x20000
+ //   uint32 frame_count  patched on close
+ //   Registers initial   the machine when the first record was taken
+@@ -83,7 +83,7 @@
+ //     per delta: uint32 offset, uint8 value
+ //     AudioSnapshot regs        (absent when apu_len is 0)
+ //
+-// AudioSnapshot is forty bytes: pc as uint16, then a, x, y, sp, psw, the
++// AudioSnapshot is forty-nine bytes: pc as uint16, then a, x, y, sp, psw, the
+ // control register, the DSP address, the four bytes each way through the
+ // mailbox, the two spare bytes, and then each timer's divider, prescaler,
+ // stage and output as three bytes apiece. One pad byte, and then the audio
+@@ -99,11 +99,22 @@
+ // sample. Those last two decide when things happen rather than what, and a
+ // reimplementation without them has every envelope falling a few samples early
+ // or late and every note starting on the wrong one of two samples. Two pad
+-// bytes at the end.
++// bytes, and last a uint8 saying how far into the instruction it was executing
++// the snapshot fell, in the same cycles the count above is in -- so that
++// `cycles - phase` is the cycle at which that instruction began. It is there
++// because the snapshot is taken from the CPU's thread and the audio processor
++// hands control back to that thread from inside a read or a write of
++// $F4-$F7, which is partway through an instruction: without it a
++// reimplementation can only compare its registers on the frames where its own
++// instruction boundary happened to land on the recorded count.
+ //
+-// Version 8 is the same without regs_len, initial_regs and the per-frame
++// Version 9 is the same with a forty-eight byte snapshot carrying no
++// instruction phase -- and with three pad bytes, at 31, 46 and 47, that were
++// never assigned before they were written, so a version 9 recording's are
++// whatever the recorder's stack held.
++// Version 8 is version 9 without regs_len, initial_regs and the per-frame
+ // register section.
+-// Version 7 is the same with a snapshot carrying no rate counter and no
++// Version 7 is version 8 with a snapshot carrying no rate counter and no
+ // alternate-sample toggle -- the same forty-eight bytes, with those three
+ // reading as nought, which is why the version and not the length says whether
+ // they are there.
+@@ -139,7 +150,7 @@
+ // has done, and this says what it is about to do and what time it thinks it
+ // is. SMP::snapshotForTrace fills it, which keeps the one place that knows
+ // that processor's insides the one place that knows them.
+-static constexpr unsigned AudioSnapshotBytes = 48;
++static constexpr unsigned AudioSnapshotBytes = 49;
+ 
+ // The display and transfer registers, as the game last left them.
+ //
+@@ -317,7 +328,7 @@
+     }
+ 
+     uint8_t header[46] = {'F', 'Z', 'T', 'R'};
+-    write16(header + 4, 9);
++    write16(header + 4, 10);
+     write32(header + 6, len);
+     write32(header + 10, 0);                // patched by close()
+     writeRegisters(header + 14, regs);
+--- a/bsnes/sfc/smp/smp.cpp
++++ b/bsnes/sfc/smp/smp.cpp
+@@ -1,4 +1,8 @@
+ #include <sfc/sfc.hpp>
++//For RamTrace::AudioSnapshotBytes: this file fills that buffer and is the one
++//place that knows what goes in it, so it should also be the one place that
++//cannot disagree with the recorder about how long it is.
++#include <emulator/ramtrace.hpp>
+ 
+ namespace SuperFamicom {
+ 
+@@ -24,6 +28,12 @@
+ }
+ 
+ auto SMP::main() -> void {
++  //The one place an instruction begins. Everything that spends a cycle goes
++  //through wait()/waitIdle() and so through stepTimers(), which is where
++  //traceClocks moves; so traceClocks - traceInstructionClocks is exactly what
++  //the instruction now running has spent, with no table of opcode lengths and
++  //nothing assumed. For BSNES_TRACE_APU; inert otherwise.
++  traceInstructionClocks = traceClocks;
+   if(r.wait) return instructionWait();
+   if(r.stop) return instructionStop();
+   instruction();
+@@ -38,7 +48,12 @@
+ }
+ 
+ auto SMP::snapshotForTrace(uint8* out) -> void {
+-  for(uint n : range(32)) out[n] = 0;
++  //The whole buffer, not the first thirty-two bytes. The caller's array is on
++  //the stack and the pad bytes at 31, 46 and 47 were never assigned, so every
++  //recording before this carried whatever happened to be there. Nothing reads
++  //them, but a recording is supposed to be a function of the run and those
++  //three bytes were not.
++  for(uint n : range(RamTrace::AudioSnapshotBytes)) out[n] = 0;
+   out[0] = r.pc.byte.l;
+   out[1] = r.pc.byte.h;
+   out[2] = r.ya.byte.l;
+@@ -73,6 +88,22 @@
+   out[43] = rateCounter & 0xff;
+   out[44] = rateCounter >> 8 & 0xff;
+   out[45] = dsp.alternateForTrace() & 1;
++  //How far into the instruction it is executing this snapshot fell, in the
++  //same cycles the count above is in, so that `cycles - phase` is the cycle at
++  //which that instruction began. Cycles *spent* and not cycles *remaining*:
++  //spent is the processor's own bookkeeping and needs nothing but a
++  //subtraction, whereas remaining would need the instruction's total length,
++  //which this emulator never holds -- an SPC700 instruction's cost here is
++  //however many times its implementation happens to call wait(), and it has
++  //not finished calling them.
++  //
++  //Clamped at 255 rather than wrapped. Nothing reaches it in practice -- the
++  //longest instruction on this processor is eight cycles, twenty at the
++  //glitched wait-state dividers -- but a snapshot taken before the first
++  //instruction of a run would otherwise read the whole clock modulo 256, and a
++  //saturated byte says "do not believe me" where a wrapped one lies.
++  uint64 spent = (traceClocks >> 1) - (traceInstructionClocks >> 1);
++  out[48] = spent > 255 ? 255 : spent;
+ }
+ 
+ auto SMP::power(bool reset) -> void {
+--- a/bsnes/sfc/smp/smp.hpp
++++ b/bsnes/sfc/smp/smp.hpp
+@@ -32,6 +32,16 @@
+   //a reimplementation that assumed one would drift.
+   uint64 traceClocks = 0;
+ 
++  //traceClocks as it stood when the instruction now being executed began, for
++  //BSNES_TRACE_APU. Set in main(), which is the only place an instruction
++  //starts, and never touched again until the next one: the difference between
++  //it and traceClocks is how far into the current instruction the processor
++  //is, and a snapshot taken from another thread is almost never taken between
++  //two of them -- the SMP hands control back to the CPU from inside readIO and
++  //writeIO on $F4-$F7 (sfc/smp/io.cpp), which is partway through whichever
++  //instruction named the mailbox.
++  uint64 traceInstructionClocks = 0;
++
+ private:
+   struct IO {
+     //timing

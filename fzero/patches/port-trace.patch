@@ -1,0 +1,93 @@
+--- a/bsnes/emulator/ramtrace.hpp
++++ b/bsnes/emulator/ramtrace.hpp
+@@ -1067,6 +1067,38 @@
+ };
+ inline auto timingTrace() -> TimingTrace& { static TimingTrace trace; return trace; }
+ 
++// Scratch instrument (audio-parting, 2026-09-26): every 65816 store to
++// $2140-$2143 and every audio-processor read of $F4-$F7, with both clocks.
++// BSNES_TRACE_PORTS=<csv>. Rows: kind,frame,master,smp_clocks,skew,port,value,pc
++//   kind w: the 65816's store, after the audio processor was brought up to it
++//   kind r: the audio processor's read, after the 65816 was brought up to it
++// master is counter.cpu (wrapping 32-bit), smp_clocks the processor's
++// traceClocks (two a cycle), skew the scheduler's smp.clock (the audio
++// processor's lead, in units of 1/(cpu.frequency*smp.frequency) s).
++struct PortTrace {
++  auto enabled() -> bool {
++    if(state >= 0) return state == 1;
++    state = 0;
++    auto path = getenv("BSNES_TRACE_PORTS");
++    if(!path) return false;
++    file = fopen(path, "w");
++    if(!file) { fprintf(stderr, "[ports] cannot open output\n"); exit(2); }
++    fprintf(file, "kind,frame,master,smp_clocks,skew,port,value,pc\n");
++    state = 1;
++    return true;
++  }
++  auto note(char kind, unsigned master, unsigned long long smpClocks, long long skew,
++            unsigned port, unsigned value, unsigned pc) -> void {
++    fprintf(file, "%c,%u,%u,%llu,%lld,%u,%u,%06x\n", kind, recorder().recordedFrames(),
++            master, smpClocks, skew, port, value, pc);
++  }
++  ~PortTrace() { if(file) fclose(file); }
++private:
++  FILE* file = nullptr;
++  int state = -1;
++};
++inline auto portTrace() -> PortTrace& { static PortTrace trace; return trace; }
++
+ // BSNES_WATCH_READS_BY=039243-039488: what a stretch of code reads.
+ inline auto inputWatch() -> WriteWatch& {
+   static WriteWatch instance;
+--- a/bsnes/sfc/cpu/cpu.hpp
++++ b/bsnes/sfc/cpu/cpu.hpp
+@@ -76,6 +76,9 @@
+     uint target = 0;
+   } overclocking;
+ 
++  //BSNES_TRACE_PORTS (scratch): the master counter, read from the other side.
++  auto traceMasterCounter() const -> uint { return counter.cpu; }
++
+ private:
+   uint version = 2;  //allowed: 1, 2
+ 
+--- a/bsnes/sfc/cpu/io.cpp
++++ b/bsnes/sfc/cpu/io.cpp
+@@ -104,6 +104,8 @@
+ 
+ auto CPU::writeAPU(uint addr, uint8 data) -> void {
+   synchronizeSMP();
++  if(RamTrace::portTrace().enabled())
++    RamTrace::portTrace().note('w', counter.cpu, smp.traceClocks, smp.clock, addr & 3, data, r.pc.d);
+   return smp.portWrite(addr & 3, data);
+ }
+ 
+--- a/bsnes/sfc/smp/io.cpp
++++ b/bsnes/sfc/smp/io.cpp
+@@ -32,18 +32,26 @@
+ 
+   case 0xf4:  //CPUIO0
+     synchronizeCPU();
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 0, io.apu0, traceInstructionPC);
+     return io.apu0;
+ 
+   case 0xf5:  //CPUIO1
+     synchronizeCPU();
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 1, io.apu1, traceInstructionPC);
+     return io.apu1;
+ 
+   case 0xf6:  //CPUIO2
+     synchronizeCPU();
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 2, io.apu2, traceInstructionPC);
+     return io.apu2;
+ 
+   case 0xf7:  //CPUIO3
+     synchronizeCPU();
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 3, io.apu3, traceInstructionPC);
+     return io.apu3;
+ 
+   case 0xf8:  //AUXIO4

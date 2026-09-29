@@ -1,0 +1,726 @@
+--- a/bsnes/emulator/ramtrace.hpp
++++ b/bsnes/emulator/ramtrace.hpp
+@@ -57,9 +57,20 @@
+ // Off by default, and cheap when on: 768 bytes of shadow, delta-encoded, and a
+ // racing frame changes a couple of dozen of them.
+ //
++// A recording that begins at a loaded state (BSNES_LOAD_STATE) begins with the
++// registers that state holds (since 2026-09-26, recorder-v16): at the load the
++// machine is asked what each register holds, as the byte a store would have
++// put there, and every byte it can answer for is seeded into the shadow before
++// the first record. Before that the shadow of such a recording began empty and
++// knew only the stores made after the load. What is and is not answered is the
++// comment on System::seedRegistersForTrace; the seed prints its count and the
++// bytes left out on stderr. BSNES_TRACE_REGS_SEED_CHECK=1 holds the same
++// reading against the shadow at every frame of a run, which on a cold boot is
++// the check that the reading says what a store said.
++//
+ // Format, little-endian, matching the reader in the fzero-rs project:
+ //   char   magic[4]     "FZTR"
+-//   uint16 version      15
++//   uint16 version      16 when the audio snapshot is recorded, 15 when it is not
+ //   uint32 ram_len      0x20000
+ //   uint32 frame_count  patched on close
+ //   Registers initial   the machine when the first record was taken
+@@ -96,7 +107,7 @@
+ //     per delta: uint32 offset, uint8 value
+ //     AudioSnapshot regs        (absent when apu_len is 0)
+ //
+-// AudioSnapshot is three hundred and eighty bytes: fifty for the audio
++// AudioSnapshot is four hundred and twelve bytes: fifty for the audio
+ // processor, forty for each of the sound chip's eight voices, one a voice
+ // after those saying whether the chip had carried that voice into the sample
+ // the snapshot fell inside, and a uint16 at the end saying where the
+@@ -200,6 +211,24 @@
+ // phase, with no instruction-length table and no backward decode -- neither of
+ // which the record could make unambiguous anyway.
+ //
++// And last, at 380, thirty-two bytes: the S-DSP's echo filter history (trace
++// v16) -- the eight samples a channel the eight-tap FIR last read out of the
++// echo buffer, oldest first, each as a left then a right int16, as the chip
++// holds them (already halved: the chip keeps the sample it read shifted right
++// by one and multiplies by coefficients of a sixty-fourth). Taken at the same
++// sample boundary as the voice blocks, because the chip reads the left sample
++// at step 22 and the right at 23. It is the one echo state a restore cannot
++// make from what else the record holds: the eight slots those samples came
++// from are rewritten with the echo's own output a few steps after each is
++// read, so a reimplementation restored without it filters eight samples of
++// silence, writes eight wrong samples back into the buffer, and the feedback
++// carries them round the buffer from there.
++//
++// Version 15 is version 16 with a three hundred and eighty byte snapshot
++// carrying no echo filter history. The recorder stamps 16 only on a recording
++// that carries the snapshot: the snapshot is the one thing the two versions
++// differ in, so a recording without it is byte for byte what version 15
++// wrote and says 15.
+ // Version 14 is version 15 with a three hundred and seventy-eight byte
+ // snapshot carrying no instruction start, and nought is an address the
+ // counter genuinely takes, which is why the version and not the value says
+@@ -262,7 +291,7 @@
+ // that knows that processor's insides the one place that knows them. (The
+ // count said "thirty-two" from version 6 to version 11 while the block grew
+ // from forty to fifty; the number is now in one place, below.)
+-static constexpr unsigned AudioSnapshotBytes = 380;
++static constexpr unsigned AudioSnapshotBytes = 412;
+ 
+ // The hardware's object table: 128 objects of four bytes - x low, y, tile,
+ // attributes - and then two bits an object of x's ninth bit and size, packed
+@@ -299,11 +328,50 @@
+     unsigned bank = address >> 16 & 0xff, within = address & 0xffff;
+     if(bank >= 0x40 && bank < 0x80) return;
+     if(bank >= 0xc0) return;
+-    if(within >= 0x2100 && within <= 0x21ff) bytes[within - 0x2100] = value;
+-    else if(within >= 0x4200 && within <= 0x43ff) bytes[0x100 + within - 0x4200] = value;
++    if(within >= 0x2100 && within <= 0x21ff) {
++      bytes[within - 0x2100] = value;
++      written[within - 0x2100] = 1;
++    } else if(within >= 0x4200 && within <= 0x43ff) {
++      bytes[0x100 + within - 0x4200] = value;
++      written[0x100 + within - 0x4200] = 1;
++    }
++  }
++
++  // Seed the shadow from a loaded state (BSNES_TRACE_REGS, 2026-09-26).
++  //
++  // A recording that begins at a loaded state used to begin with a shadow that
++  // knew only the stores made since the load: every register the game had set
++  // up before the state was cut read nought until the game happened to write
++  // it again, which for the race's HDMA channels is the next race setup,
++  // thousands of records later. So at the load the emulated machine is asked
++  // what each register holds (System::seedRegistersForTrace), and every byte it
++  // can answer for is put in the shadow as if it had just been stored.
++  //
++  // `known[i]` says whether `values[i]` is an answer. A byte the machine cannot
++  // answer for is left exactly as it was - which, a load coming before the
++  // first instruction runs, is nought, as it always was - so a seeded
++  // recording differs from an unseeded one only in bytes the unseeded one had
++  // no value for yet. Which bytes cannot be answered, and why, is the
++  // comment on System::seedRegistersForTrace, and the seed prints its count
++  // and those bytes as ranges on stderr.
++  //
++  // Only before the recording starts: a load after it (a rewind, run-ahead)
++  // must not move a shadow the recording has already written from.
++  auto seed(const uint8_t* values, const uint8_t* known) -> unsigned {
++    unsigned count = 0;
++    for(unsigned n = 0; n < Bytes; n++) {
++      if(!known[n]) continue;
++      bytes[n] = values[n];
++      count++;
++    }
++    return count;
+   }
+ 
+   uint8_t bytes[Bytes] = {};
++  //Which bytes a store has reached since power-on, for the seed check
++  //(BSNES_TRACE_REGS_SEED_CHECK): a byte nothing stored is not a claim the
++  //shadow makes, so a seed is only ever held against a byte that is.
++  uint8_t written[Bytes] = {};
+   int state = -1;
+ };
+ 
+@@ -459,7 +527,9 @@
+     }
+ 
+     uint8_t header[50] = {'F', 'Z', 'T', 'R'};
+-    write16(header + 4, 15);
++    //16 only where the snapshot is written: it is all version 16 changed, so a
++    //recording without it is version 15 to the byte and says so.
++    write16(header + 4, apuLen ? 16 : 15);
+     write32(header + 6, len);
+     write32(header + 10, 0);                // patched by close()
+     writeRegisters(header + 14, regs);
+@@ -1067,6 +1137,52 @@
+ };
+ inline auto timingTrace() -> TimingTrace& { static TimingTrace trace; return trace; }
+ 
++// BSNES_TRACE_PORTS=<csv> (2026-09-26, pinned from fzero-rs's
++// docs/patches/port-trace.patch, audio-parting's scratch instrument): every
++// 65816 store to $2140-$2143 and every audio-processor read of $F4-$F7, each
++// with both processors' clocks, so that a store can be delivered to a
++// reimplementation of the audio side at the machine's own time rather than at
++// the instruction boundary a model of the 65816 puts it on. A record holds the
++// four ports as the 65816 left them at the vblank; this says when, inside the
++// frame, each value arrived and which side of each poll it fell.
++//
++// Rows: kind,frame,master,smp_clocks,skew,port,value,pc
++//   kind w  the 65816's store, after the audio processor was brought up to it
++//   kind r  the audio processor's read, after the 65816 was brought up to it
++//   frame   the record being written (Recorder::recordedFrames), the same
++//           numbering fzero-verify uses
++//   master  counter.cpu, the 65816's master-clock counter (wrapping 32-bit)
++//   smp_clocks  the audio processor's traceClocks (two a cycle), the clock the
++//           audio snapshot's cycle count is taken from
++//   skew    the scheduler's smp.clock: the audio processor's lead over the
++//           65816, in units of 1/(cpu frequency * smp frequency) s
++//   port    0..3; value the byte; pc the store's or the read's instruction
++// Nothing else changes: the RAM trace, its snapshot and the frame hashes are
++// the same with or without it.
++struct PortTrace {
++  auto enabled() -> bool {
++    if(state >= 0) return state == 1;
++    state = 0;
++    auto path = getenv("BSNES_TRACE_PORTS");
++    if(!path) return false;
++    file = fopen(path, "w");
++    if(!file) { fprintf(stderr, "[ports] cannot open output\n"); exit(2); }
++    fprintf(file, "kind,frame,master,smp_clocks,skew,port,value,pc\n");
++    state = 1;
++    return true;
++  }
++  auto note(char kind, unsigned master, unsigned long long smpClocks, long long skew,
++            unsigned port, unsigned value, unsigned pc) -> void {
++    fprintf(file, "%c,%u,%u,%llu,%lld,%u,%u,%06x\n", kind, recorder().recordedFrames(),
++            master, smpClocks, skew, port, value, pc);
++  }
++  ~PortTrace() { if(file) fclose(file); }
++private:
++  FILE* file = nullptr;
++  int state = -1;
++};
++inline auto portTrace() -> PortTrace& { static PortTrace trace; return trace; }
++
+ // BSNES_WATCH_READS_BY=039243-039488: what a stretch of code reads.
+ inline auto inputWatch() -> WriteWatch& {
+   static WriteWatch instance;
+--- a/bsnes/sfc/cpu/cpu.cpp
++++ b/bsnes/sfc/cpu/cpu.cpp
+@@ -161,4 +161,73 @@
+   status.interruptPending = 1;
+ }
+ 
++
++//BSNES_TRACE_REGS (2026-09-26): $4200-$43FF at a state load, as the bytes a
++//store would have put there, and - because a transfer writes the B bus the way
++//a store does - every B-bus register a channel pointed from A to B could have
++//written last is withdrawn from `known`. See System::seedRegistersForTrace for
++//what each register is and why the ones left out are.
++auto CPU::registersForTrace(uint8* values, uint8* known) const -> void {
++  auto set = [&](uint address, uint value) {
++    values[0x100 + address - 0x4200] = value;
++    known[0x100 + address - 0x4200] = 1;
++  };
++  set(0x4200, io.nmiEnable << 7 | io.virqEnable << 5 | io.hirqEnable << 4 | io.autoJoypadPoll << 0);
++  set(0x4201, io.pio);
++  set(0x4202, io.wrmpya);
++  set(0x4203, io.wrmpyb);
++  set(0x4204, io.wrdiva >> 0 & 0xff);
++  set(0x4205, io.wrdiva >> 8 & 0xff);
++  set(0x4206, io.wrdivb);
++  {
++    uint htime = ((io.htime >> 2) - 1) & 0x1ff;
++    set(0x4207, htime & 0xff);
++    set(0x4208, htime >> 8 & 1);
++  }
++  set(0x4209, io.vtime & 0xff);
++  set(0x420a, io.vtime >> 8 & 1);
++  {
++    uint enabled = 0;
++    for(uint n : range(8)) enabled |= channels[n].hdmaEnable << n;
++    set(0x420c, enabled);
++  }
++  set(0x420d, io.fastROM);
++  for(uint n : range(8)) {
++    auto& channel = channels[n];
++    uint base = 0x4300 + n * 0x10;
++    set(base + 0x0, channel.transferMode << 0 | channel.fixedTransfer << 3
++                  | channel.reverseTransfer << 4 | channel.unused << 5
++                  | channel.indirect << 6 | channel.direction << 7);
++    set(base + 0x1, channel.targetAddress);
++    set(base + 0x4, channel.sourceBank);
++    set(base + 0x7, channel.indirectBank);
++    set(base + 0xb, channel.unknown);
++    set(base + 0xf, channel.unknown);
++    //A general transfer walks the source address on and counts the size down
++    //to nought; a channel HDMA is using does neither (indirect HDMA reloads
++    //the size, which is its indirect address). So these are the stores only
++    //on a channel HDMA owns, and only the size of a direct one.
++    if(channel.hdmaEnable) {
++      set(base + 0x2, channel.sourceAddress >> 0 & 0xff);
++      set(base + 0x3, channel.sourceAddress >> 8 & 0xff);
++      if(!channel.indirect) {
++        set(base + 0x5, channel.transferSize >> 0 & 0xff);
++        set(base + 0x6, channel.transferSize >> 8 & 0xff);
++      }
++    }
++    //Every register a channel pointed from A to B writes holds the channel's
++    //byte, not a store, whenever the channel wrote it last.
++    if(channel.direction == 0) {
++      static const uint8 offsets[8][4] = {
++        {0, 0, 0, 0}, {0, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 1, 1},
++        {0, 1, 2, 3}, {0, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 1, 1},
++      };
++      for(uint k : range(4)) {
++        uint b = (channel.targetAddress + offsets[channel.transferMode][k]) & 0xff;
++        known[b] = 0;
++      }
++    }
++  }
++}
++
+ }
+--- a/bsnes/sfc/cpu/cpu.hpp
++++ b/bsnes/sfc/cpu/cpu.hpp
+@@ -76,6 +76,14 @@
+     uint target = 0;
+   } overclocking;
+ 
++  //BSNES_TRACE_PORTS: the master counter, read from the audio processor's side.
++  auto traceMasterCounter() const -> uint { return counter.cpu; }
++
++  //BSNES_TRACE_REGS: this processor's share of the register file at a state
++  //load ($4200-$43FF), and which B-bus registers a DMA channel may have written
++  //last. See System::seedRegistersForTrace.
++  auto registersForTrace(uint8* values, uint8* known) const -> void;
++
+ private:
+   uint version = 2;  //allowed: 1, 2
+ 
+--- a/bsnes/sfc/cpu/io.cpp
++++ b/bsnes/sfc/cpu/io.cpp
+@@ -104,6 +104,9 @@
+ 
+ auto CPU::writeAPU(uint addr, uint8 data) -> void {
+   synchronizeSMP();
++  //BSNES_TRACE_PORTS: the store, after the audio processor was brought up to it
++  if(RamTrace::portTrace().enabled())
++    RamTrace::portTrace().note('w', counter.cpu, smp.traceClocks, smp.clock, addr & 3, data, r.pc.d);
+   return smp.portWrite(addr & 3, data);
+ }
+ 
+--- a/bsnes/sfc/dsp/dsp.cpp
++++ b/bsnes/sfc/dsp/dsp.cpp
+@@ -164,6 +164,15 @@
+       b[17 + n * 2] = sample >> 8 & 0xff;
+     }
+   }
++  //And the echo filter's eight samples a channel (trace v16), at the same
++  //boundary: oldest first, left then right, as the chip holds them.
++  for(uint n : range(8)) {
++    for(uint ch : range(2)) {
++      uint sample = (uint)spc_dsp.echoHistoryForTrace(1 + n, ch);
++      traceEchoHistory[n * 4 + ch * 2 + 0] = sample & 0xff;
++      traceEchoHistory[n * 4 + ch * 2 + 1] = sample >> 8 & 0xff;
++    }
++  }
+   //A new sample, so nothing has been carried into it yet. The chip sets the
+   //bits itself as each voice's step runs.
+   spc_dsp.clearCarriedForTrace();
+--- a/bsnes/sfc/dsp/dsp.hpp
++++ b/bsnes/sfc/dsp/dsp.hpp
+@@ -65,6 +65,14 @@
+   //the sample in flight for itself, exactly as this one is doing.
+   auto captureVoicesForTrace() -> void;
+   auto voiceBlocksForTrace() const -> const uint8* { return traceVoiceBlocks; }
++  //BSNES_TRACE_APU (trace v16): the echo filter's history, kept at the same
++  //boundary as the voice blocks and for the same reason -- the chip reads one
++  //channel's sample at step 22 and the other's at 23, so a history read off it
++  //inside a sample can be two instants. Thirty-two bytes: eight samples,
++  //oldest first, each a left and a right int16, little-endian.
++  auto echoHistoryForTrace() const -> const uint8* { return traceEchoHistory; }
++  static constexpr uint EchoHistoryBytes = 32;
++  uint8 traceEchoHistory[EchoHistoryBytes] = {};
+   //And which voices the chip has carried since that boundary, one bit a
+   //voice, so the version 12 split can be read out of a version 13 recording
+   //rather than inferred from the step number.
+--- a/bsnes/sfc/dsp/SPC_DSP.h
++++ b/bsnes/sfc/dsp/SPC_DSP.h
+@@ -315,6 +315,15 @@
+     //is eight instants and not one.
+     int traceCarried = 0;
+     int carriedForTrace() const { return traceCarried; }
++    //The echo filter's memory (trace v16): the eight samples a channel the
++    //FIR has read out of the echo buffer, as the chip holds them (each already
++    //halved, which is how the filter keeps them). `n` runs 1..8, oldest first,
++    //and is meant to be asked at a sample boundary: there `echo_hist_pos [0]`
++    //(which is `[8]`, the second copy) is the newest and `[1]` the oldest, and
++    //the next sample's step 22 overwrites `[1]` after moving on by one. The
++    //slots those samples were read from have been rewritten with the echo's
++    //own output since, so audio RAM cannot give them back.
++    int echoHistoryForTrace(int n, int ch) const { return m.echo_hist_pos [n] [ch]; }
+     void clearCarriedForTrace() { traceCarried = 0; }
+ };
+ 
+--- a/bsnes/sfc/ppu/ppu.cpp
++++ b/bsnes/sfc/ppu/ppu.cpp
+@@ -208,6 +208,12 @@
+   for(uint n = 0; n < 544; n++) out[n] = obj.oam.read(n);
+ }
+ 
++auto PPU::registersForTrace(uint8* values, uint8* known) -> bool {
++  if(system.hdPPU() || !system.fastPPU()) return false;
++  ppufast.registersForTrace(values, known);
++  return true;
++}
++
+ auto PPU::refresh() -> void {
+   if(system.hdPPU()) {
+     return ppuhd.refresh();
+--- a/bsnes/sfc/ppu/ppu.hpp
++++ b/bsnes/sfc/ppu/ppu.hpp
+@@ -13,6 +13,11 @@
+   //Which core is running is a runtime setting, so this too is in ppu.cpp.
+   auto oamForTrace(uint8* out) -> void;
+ 
++  //BSNES_TRACE_REGS: the B-bus registers at a state load, from the core that
++  //is running (System::seedRegistersForTrace). Only the fast core is taught
++  //it; the others answer for nothing and say so, returning false.
++  auto registersForTrace(uint8* values, uint8* known) -> bool;
++
+   alwaysinline auto interlace() const -> bool { return display.interlace; }
+   alwaysinline auto overscan() const -> bool { return display.overscan; }
+   alwaysinline auto vdisp() const -> uint { return display.vdisp; }
+--- a/bsnes/sfc/ppu-fast/io.cpp
++++ b/bsnes/sfc/ppu-fast/io.cpp
+@@ -697,3 +697,94 @@
+     break;
+   }
+ }
++
++//BSNES_TRACE_REGS (2026-09-26): each register writeIO above keeps whole, read
++//back as the byte a store would have written. `values` and `known` are the
++//recorder's register file ($2100 at 0); a register left unknown is one this
++//core does not keep in a form that says what was stored, and why is beside
++//each in System::seedRegistersForTrace. Bits a register does not keep are
++//read as nought: a store that set one would differ there.
++auto PPU::registersForTrace(uint8* values, uint8* known) const -> void {
++  auto set = [&](uint address, uint value) {
++    values[address - 0x2100] = value;
++    known[address - 0x2100] = 1;
++  };
++  set(0x2100, io.displayDisable << 7 | (io.displayBrightness & 15));
++  set(0x2101, io.obj.baseSize << 5 | (io.obj.nameselect & 3) << 3 | (io.obj.tiledataAddress >> 13 & 3));
++  //the base address as written, not the internal address that walks on
++  set(0x2102, io.oamBaseAddress >> 1 & 0xff);
++  set(0x2103, io.oamPriority << 7 | (io.oamBaseAddress >> 9 & 1));
++  set(0x2105, io.bg4.tileSize << 7 | io.bg3.tileSize << 6 | io.bg2.tileSize << 5
++            | io.bg1.tileSize << 4 | io.bgPriority << 3 | (io.bgMode & 7));
++  set(0x2106, ((io.mosaic.size - 1) & 15) << 4 | io.bg4.mosaicEnable << 3 | io.bg3.mosaicEnable << 2
++            | io.bg2.mosaicEnable << 1 | io.bg1.mosaicEnable << 0);
++  set(0x2107, (io.bg1.screenAddress >> 8 & 0x7c) | (io.bg1.screenSize & 3));
++  set(0x2108, (io.bg2.screenAddress >> 8 & 0x7c) | (io.bg2.screenSize & 3));
++  set(0x2109, (io.bg3.screenAddress >> 8 & 0x7c) | (io.bg3.screenSize & 3));
++  set(0x210a, (io.bg4.screenAddress >> 8 & 0x7c) | (io.bg4.screenSize & 3));
++  set(0x210b, (io.bg2.tiledataAddress >> 8 & 0x70) | (io.bg1.tiledataAddress >> 12 & 7));
++  set(0x210c, (io.bg4.tiledataAddress >> 8 & 0x70) | (io.bg3.tiledataAddress >> 12 & 7));
++  //Every write to a scroll register puts the byte written in the top half of
++  //the offset, so the top half *is* the last byte stored there. $210D and
++  //$210E feed Mode 7's offsets as well from the same store; the two must agree.
++  if((io.bg1.hoffset >> 8) == (io.mode7.hoffset >> 8)) set(0x210d, io.bg1.hoffset >> 8);
++  if((io.bg1.voffset >> 8) == (io.mode7.voffset >> 8)) set(0x210e, io.bg1.voffset >> 8);
++  set(0x210f, io.bg2.hoffset >> 8);
++  set(0x2110, io.bg2.voffset >> 8);
++  set(0x2111, io.bg3.hoffset >> 8);
++  set(0x2112, io.bg3.voffset >> 8);
++  set(0x2113, io.bg4.hoffset >> 8);
++  set(0x2114, io.bg4.voffset >> 8);
++  //VMAIN keeps its increment as a step, and steps of 128 come from two
++  //settings; only an unambiguous one is an answer.
++  {
++    int step = io.vramIncrementSize == 1 ? 0 : io.vramIncrementSize == 32 ? 1 : -1;
++    if(step >= 0) set(0x2115, io.vramIncrementMode << 7 | (io.vramMapping & 3) << 2 | step);
++  }
++  set(0x211a, (io.mode7.repeat & 3) << 6 | io.mode7.vflip << 1 | io.mode7.hflip << 0);
++  //Each Mode 7 parameter is the byte just stored above the one stored before
++  //it, so its top half is the last byte stored to that register.
++  set(0x211b, io.mode7.a >> 8);
++  set(0x211c, io.mode7.b >> 8);
++  set(0x211d, io.mode7.c >> 8);
++  set(0x211e, io.mode7.d >> 8);
++  set(0x211f, io.mode7.x >> 8);
++  set(0x2120, io.mode7.y >> 8);
++  set(0x2123, io.bg2.window.twoEnable << 7 | io.bg2.window.twoInvert << 6
++            | io.bg2.window.oneEnable << 5 | io.bg2.window.oneInvert << 4
++            | io.bg1.window.twoEnable << 3 | io.bg1.window.twoInvert << 2
++            | io.bg1.window.oneEnable << 1 | io.bg1.window.oneInvert << 0);
++  set(0x2124, io.bg4.window.twoEnable << 7 | io.bg4.window.twoInvert << 6
++            | io.bg4.window.oneEnable << 5 | io.bg4.window.oneInvert << 4
++            | io.bg3.window.twoEnable << 3 | io.bg3.window.twoInvert << 2
++            | io.bg3.window.oneEnable << 1 | io.bg3.window.oneInvert << 0);
++  set(0x2125, io.col.window.twoEnable << 7 | io.col.window.twoInvert << 6
++            | io.col.window.oneEnable << 5 | io.col.window.oneInvert << 4
++            | io.obj.window.twoEnable << 3 | io.obj.window.twoInvert << 2
++            | io.obj.window.oneEnable << 1 | io.obj.window.oneInvert << 0);
++  set(0x2126, io.window.oneLeft);
++  set(0x2127, io.window.oneRight);
++  set(0x2128, io.window.twoLeft);
++  set(0x2129, io.window.twoRight);
++  set(0x212a, (io.bg4.window.mask & 3) << 6 | (io.bg3.window.mask & 3) << 4
++            | (io.bg2.window.mask & 3) << 2 | (io.bg1.window.mask & 3) << 0);
++  set(0x212b, (io.col.window.mask & 3) << 2 | (io.obj.window.mask & 3) << 0);
++  set(0x212c, io.obj.aboveEnable << 4 | io.bg4.aboveEnable << 3 | io.bg3.aboveEnable << 2
++            | io.bg2.aboveEnable << 1 | io.bg1.aboveEnable << 0);
++  set(0x212d, io.obj.belowEnable << 4 | io.bg4.belowEnable << 3 | io.bg3.belowEnable << 2
++            | io.bg2.belowEnable << 1 | io.bg1.belowEnable << 0);
++  set(0x212e, io.obj.window.aboveEnable << 4 | io.bg4.window.aboveEnable << 3
++            | io.bg3.window.aboveEnable << 2 | io.bg2.window.aboveEnable << 1
++            | io.bg1.window.aboveEnable << 0);
++  set(0x212f, io.obj.window.belowEnable << 4 | io.bg4.window.belowEnable << 3
++            | io.bg3.window.belowEnable << 2 | io.bg2.window.belowEnable << 1
++            | io.bg1.window.belowEnable << 0);
++  set(0x2130, (io.col.window.aboveMask & 3) << 6 | (io.col.window.belowMask & 3) << 4
++            | io.col.blendMode << 1 | io.col.directColor << 0);
++  set(0x2131, io.col.mathMode << 7 | io.col.halve << 6 | io.col.enable[Source::COL] << 5
++            | io.col.enable[Source::OBJ2] << 4 | io.col.enable[Source::BG4] << 3
++            | io.col.enable[Source::BG3] << 2 | io.col.enable[Source::BG2] << 1
++            | io.col.enable[Source::BG1] << 0);
++  set(0x2133, io.extbg << 6 | io.pseudoHires << 3 | io.overscan << 2
++            | io.obj.interlace << 1 | io.interlace << 0);
++}
+--- a/bsnes/sfc/ppu-fast/ppu.hpp
++++ b/bsnes/sfc/ppu-fast/ppu.hpp
+@@ -15,6 +15,12 @@
+   //The object table for the recorder: readObject() is the core's own
+   //reconstruction of a hardware byte from its decoded objects, so a table
+   //built from it is the table the CPU would read back at $2138.
++  //BSNES_TRACE_REGS: the B-bus registers this core can say it holds, as the
++  //bytes a store would have put there, at a state load. See
++  //System::seedRegistersForTrace; defined in io.cpp beside the writes it
++  //inverts.
++  auto registersForTrace(uint8* values, uint8* known) const -> void;
++
+   auto oamForTrace(uint8* out) -> void {
+     for(uint n = 0; n < 544; n++) out[n] = readObject(n);
+   }
+--- a/bsnes/sfc/smp/io.cpp
++++ b/bsnes/sfc/smp/io.cpp
+@@ -32,18 +32,30 @@
+ 
+   case 0xf4:  //CPUIO0
+     synchronizeCPU();
++    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 0, io.apu0, traceInstructionPC);
+     return io.apu0;
+ 
+   case 0xf5:  //CPUIO1
+     synchronizeCPU();
++    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 1, io.apu1, traceInstructionPC);
+     return io.apu1;
+ 
+   case 0xf6:  //CPUIO2
+     synchronizeCPU();
++    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 2, io.apu2, traceInstructionPC);
+     return io.apu2;
+ 
+   case 0xf7:  //CPUIO3
+     synchronizeCPU();
++    //BSNES_TRACE_PORTS: the read, after the 65816 was brought up to it
++    if(RamTrace::portTrace().enabled())
++      RamTrace::portTrace().note('r', cpu.traceMasterCounter(), traceClocks, clock, 3, io.apu3, traceInstructionPC);
+     return io.apu3;
+ 
+   case 0xf8:  //AUXIO4
+--- a/bsnes/sfc/smp/smp.cpp
++++ b/bsnes/sfc/smp/smp.cpp
+@@ -228,6 +228,22 @@
+   //It needs no opcode-length table here and none there.
+   out[378] = traceInstructionPC & 0xff;
+   out[379] = traceInstructionPC >> 8 & 0xff;
++
++  //And the echo filter's memory (trace v16): the eight samples a channel the
++  //FIR last read out of the echo buffer, oldest first, each as a left and a
++  //right int16 -- as the chip holds them, already halved. Taken at the same
++  //boundary as the voice blocks above (DSP::captureVoicesForTrace), because
++  //the chip reads the left sample at step 22 and the right at 23 and a history
++  //read here could be two instants. Nothing else in the record can give them
++  //back: the slots they were read from are rewritten with the echo's own
++  //output a few steps later, so a restore that starts the filter from silence
++  //makes eight wrong samples of echo and writes them into the buffer, where
++  //the feedback carries them round again.
++  memcpy(out + 380, dsp.echoHistoryForTrace(), 32);
++}
++
++auto SMP::cpuPortForTrace(uint n) const -> uint8 {
++  return n == 0 ? io.apu0 : n == 1 ? io.apu1 : n == 2 ? io.apu2 : io.apu3;
+ }
+ 
+ auto SMP::power(bool reset) -> void {
+--- a/bsnes/sfc/smp/smp.hpp
++++ b/bsnes/sfc/smp/smp.hpp
+@@ -50,6 +50,10 @@
+   //instruction they describe.
+   uint16 traceInstructionPC = 0;
+ 
++  //BSNES_TRACE_REGS: what the 65816 last stored to port n ($2140 + n), as this
++  //processor holds it for $F4 + n. See System::seedRegistersForTrace.
++  auto cpuPortForTrace(uint n) const -> uint8;
++
+ private:
+   struct IO {
+     //timing
+--- a/bsnes/sfc/system/serialization.cpp
++++ b/bsnes/sfc/system/serialization.cpp
+@@ -55,6 +55,11 @@
+ 
+   if(synchronize) power(/* reset = */ false);
+   serializeAll(s, synchronize);
++  //BSNES_TRACE_REGS: a recording that begins at this state begins with the
++  //registers the state holds, not an empty shadow. Only before the recording
++  //starts: a later load (a rewind, run-ahead) must not move a shadow the
++  //recording is already writing deltas from.
++  if(RamTrace::tracingRegisters() && !RamTrace::recorder().recording()) seedRegistersForTrace();
+   return true;
+ }
+ 
+--- a/bsnes/sfc/system/system.cpp
++++ b/bsnes/sfc/system/system.cpp
+@@ -116,6 +116,9 @@
+   //BSNES_POKE: forge work RAM once, before the record of that frame is written,
+   //so the recording's first record already holds the forged state.
+   RamTrace::poke().applyIfDue(cpu.wram);
++  //BSNES_TRACE_REGS_SEED_CHECK: the seed's reading against the shadow, before
++  //this frame's record is written; inert unless set.
++  checkRegisterSeedForTrace();
+   if(!RamTrace::snapshotting()) {
+     uint8 audioRegs[RamTrace::AudioSnapshotBytes];
+     smp.snapshotForTrace(audioRegs);
+@@ -140,6 +143,129 @@
+   Memory::GlobalWriteEnable = false;
+ }
+ 
++//BSNES_TRACE_REGS at a state load (2026-09-26): the register file as the
++//loaded machine holds it, for RamTrace::RegisterFile::seed.
++//
++//The recorder's register shadow is the game's own stores, and a recording that
++//begins at a loaded state used to begin with a shadow holding none of the
++//stores made before the state was cut. Here each part of the machine answers
++//for the registers it keeps, as the byte a store would have put there. What is
++//answered, and what is not and why:
++//
++//  $2100-$2133 (PPU, the fast core the recorder runs): every register the core
++//    keeps whole, inverted from its decoded fields, bits it does not keep read
++//    as nought. Not answered: $2104, $2118, $2119, $2122 and $2180 are data
++//    ports - a store to one goes into memory, and which byte was last is kept
++//    nowhere; $2116/$2117 (VRAM address) and $2121 (CGRAM address) are
++//    stepped on by every data-port access, so what the chip holds is not what
++//    was stored; $2115 when its increment is 128, which two settings give;
++//    $2132 (COLDATA), whose last store's three select bits are kept nowhere;
++//    $210D/$210E when the background and Mode 7 halves disagree about the one
++//    byte both took from the last store. The accurate and HD cores are not
++//    taught this and answer for no PPU register at all (it says so).
++//  $2134-$213F: read-only; a store to one changes nothing the chip keeps.
++//  $2140-$2143: what the 65816 last stored to each port, as the audio
++//    processor holds it for $F4-$F7 - unless the driver has since cleared the
++//    pair through $F1 bits 4-5, when it holds nought (measured, not assumed:
++//    BSNES_TRACE_REGS_SEED_CHECK below).
++//  $2181-$2183: the WRAM address, stepped on by every $2180 access.
++//  $4200-$420D (CPU): NMITIMEN, WRIO, the multiplier and divider operands (as
++//    last accepted), HTIME/VTIME, HDMAEN, MEMSEL. Not answered: $420B (MDMAEN),
++//    which the hardware clears when the transfer ends.
++//  $4300-$437F (DMA): each channel's $43x0, $43x1, $43x4, $43x7, $43xB/$43xF
++//    always; $43x2/$43x3 only on a channel HDMA owns ($420C), because a
++//    general transfer walks the source address on; $43x5/$43x6 only on a
++//    direct HDMA channel, because a general transfer counts the size down and
++//    indirect HDMA reloads it. Never $43x8-$43xA, which HDMA itself walks.
++//  And any B-bus register a channel pointed from A to B writes: whenever the
++//    channel wrote it last, what the chip holds is the channel's byte and not
++//    a store. That is the shadow's own rule (RamTrace::RegisterFile: stores,
++//    never DMA or HDMA).
++//  Every other address in $2184-$21FF, $420E-$42FF and $43xC-$43xE holds
++//    nothing a store sets.
++//
++//A byte not answered for is left as it was - nought, before the first
++//instruction - so a seeded recording differs from an unseeded one only in
++//bytes the unseeded one had no value for yet.
++auto System::registersForTrace(uint8* values, uint8* known) -> bool {
++  for(uint n : range(RamTrace::RegisterFile::Bytes)) values[n] = 0, known[n] = 0;
++  bool ppuAnswered = ppu.registersForTrace(values, known);
++  for(uint n : range(4)) {
++    values[0x40 + n] = smp.cpuPortForTrace(n);
++    known[0x40 + n] = 1;
++  }
++  cpu.registersForTrace(values, known);
++  return ppuAnswered;
++}
++
++auto System::seedRegistersForTrace() -> void {
++  uint8 values[RamTrace::RegisterFile::Bytes];
++  uint8 known[RamTrace::RegisterFile::Bytes];
++  bool ppuAnswered = registersForTrace(values, known);
++  uint seeded = RamTrace::registerFile().seed(values, known);
++  fprintf(stderr, "[regs] seeded %u of %u register bytes from the loaded state%s; not seeded:",
++          seeded, RamTrace::RegisterFile::Bytes,
++          ppuAnswered ? "" : " (this PPU core answers for none of $2100-$213F)");
++  //The bytes left out, as runs of addresses, so a run says what its record 0
++  //cannot speak for.
++  for(uint n = 0; n < RamTrace::RegisterFile::Bytes;) {
++    if(known[n]) { n++; continue; }
++    uint first = n;
++    while(n < RamTrace::RegisterFile::Bytes && !known[n]
++          && (n == first || (n & 0xff) != 0)) n++;
++    uint a = first < 0x100 ? 0x2100 + first : 0x4200 + first - 0x100;
++    uint b = (n - 1) < 0x100 ? 0x2100 + (n - 1) : 0x4200 + (n - 1) - 0x100;
++    if(a == b) fprintf(stderr, " $%04X", a);
++    else fprintf(stderr, " $%04X-$%04X", a, b);
++  }
++  fprintf(stderr, "\n");
++}
++
++//BSNES_TRACE_REGS_SEED_CHECK=1 (with BSNES_TRACE_REGS): at every frame, what
++//the seed would say against what the shadow holds, over every byte the seed
++//answers for and a store has reached. On a cold boot the two are meant to
++//agree wherever the seed answers, so each disagreement is the seed claiming
++//something about a register that is not true, and the summary at exit names
++//every register that disagreed and on how many frames. It changes nothing
++//recorded.
++auto System::checkRegisterSeedForTrace() -> void {
++  static int on = -1;
++  static uint32 frames = 0, compared[RamTrace::RegisterFile::Bytes] = {};
++  static uint32 differed[RamTrace::RegisterFile::Bytes] = {};
++  static uint8 firstSeed[RamTrace::RegisterFile::Bytes], firstShadow[RamTrace::RegisterFile::Bytes];
++  static uint32 firstFrame[RamTrace::RegisterFile::Bytes];
++  if(on < 0) {
++    on = getenv("BSNES_TRACE_REGS_SEED_CHECK") && RamTrace::tracingRegisters() ? 1 : 0;
++    if(on) atexit([] {
++      uint registers = 0;
++      for(uint n : range(RamTrace::RegisterFile::Bytes)) registers += compared[n] != 0;
++      fprintf(stderr, "[regs-seed-check] %u frames, %u registers compared\n", frames, registers);
++      for(uint n : range(RamTrace::RegisterFile::Bytes)) {
++        if(!differed[n]) continue;
++        uint a = n < 0x100 ? 0x2100 + n : 0x4200 + n - 0x100;
++        fprintf(stderr, "[regs-seed-check] $%04X differs on %u of %u frames; first at frame %u: seed %02x, shadow %02x\n",
++                a, differed[n], compared[n], firstFrame[n], firstSeed[n], firstShadow[n]);
++      }
++    });
++  }
++  if(!on) return;
++  uint8 values[RamTrace::RegisterFile::Bytes];
++  uint8 known[RamTrace::RegisterFile::Bytes];
++  registersForTrace(values, known);
++  auto& file = RamTrace::registerFile();
++  for(uint n : range(RamTrace::RegisterFile::Bytes)) {
++    if(!known[n] || !file.written[n]) continue;
++    compared[n]++;
++    if(values[n] == file.bytes[n]) continue;
++    if(!differed[n]++) {
++      firstFrame[n] = frames;
++      firstSeed[n] = values[n];
++      firstShadow[n] = file.bytes[n];
++    }
++  }
++  frames++;
++}
++
+ auto System::load(Emulator::Interface* interface) -> bool {
+   information = {};
+ 
+--- a/bsnes/sfc/system/system.hpp
++++ b/bsnes/sfc/system/system.hpp
+@@ -15,6 +15,13 @@
+   auto runToSaveStrict() -> void;
+   auto frameEvent() -> void;
+ 
++  //BSNES_TRACE_REGS: the register file as the loaded machine holds it, put
++  //into the recorder's shadow at a state load; and the check that holds that
++  //reading against the shadow on a cold run. system.cpp says what is read.
++  auto registersForTrace(uint8* values, uint8* known) -> bool;
++  auto seedRegistersForTrace() -> void;
++  auto checkRegisterSeedForTrace() -> void;
++
+   auto load(Emulator::Interface*) -> bool;
+   auto save() -> void;
+   auto unload() -> void;
