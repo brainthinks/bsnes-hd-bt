@@ -141,10 +141,15 @@ auto System::frameEvent() -> void {
     ppu.oamForTrace(oam);
     uint8 colours[512];
     ppu.cgramForTrace(colours);
+    //version 3: the timers' dropped clocks (byte 49) and the chip's step
+    //(byte 42) from the snapshot BSNES_TRACE_APU takes; reading it changes
+    //nothing
+    uint8 audioRegs[RamTrace::AudioSnapshotBytes];
+    smp.snapshotForTrace(audioRegs);
     Live::capture(cpu.wram, ppu.vramForTrace(), colours, oam, RamTrace::registerFile().bytes,
                   dsp.apuramForTrace(), dsp.registersForTrace(),
                   dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
-                  smp.traceClocks >> 1);
+                  smp.traceClocks >> 1, smp.traceClocks, audioRegs[49], audioRegs[42]);
   }
 
   //refresh all cheat codes once per frame
