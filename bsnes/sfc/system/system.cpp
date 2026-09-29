@@ -1,6 +1,7 @@
 #include <emulator/ramtrace.hpp>
-#include <emulator/live.hpp>
 #include <sfc/sfc.hpp>
+//after sfc.hpp, so the headers sfc.hpp brings in keep their own order
+#include <emulator/live.hpp>
 
 namespace SuperFamicom {
 
