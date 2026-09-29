@@ -42,7 +42,7 @@ Every integer is little-endian.
 **hello** (emulator to program, once, on connecting):
 
     magic     8   "FZLIVE" 0x1a 0x00
-    version   4   2 (1 before commit 70bbada5)
+    version   4   3 (2 before commit a442694f, 1 before 70bbada5)
     lead      4   2
     domains   1   7
     lengths   4 x 7, in domain order
@@ -58,13 +58,17 @@ Every integer is little-endian.
 **replies** (emulator to program):
 
     'S' frame:u32 present:u8 hash:32 x 7 audio_cycle:u64
+        audio_clocks:u64 divider_clocks:u8 dsp_step:u8
                     after an 'F': the frame counter the frame ran as, which
                     domains the capture holds (bit n for domain n), the
-                    SHA-256 of each (zeroes for an absent one), and (version
-                    2) the audio processor's cycle count at the capture.
+                    SHA-256 of each (zeroes for an absent one), (version 2)
+                    the audio processor's cycle count at the capture, and
+                    (version 3) the clock count that cycle count is the half
+                    of, the timers' dropped clocks and the sound chip's step.
                     `present` is nought when the frame event never came,
-                    which the other end refuses; `audio_cycle` is then
-                    nought too. Version 1's 'S' ends after the hashes.
+                    which the other end refuses; the four audio fields are
+                    then nought too. Version 2's 'S' ends after
+                    `audio_cycle`, version 1's after the hashes.
     'B' mask:u8 bytes...
                     after a 'D': the domains of `mask` that are present, each
                     whole, in domain order.
@@ -99,6 +103,21 @@ cycle, which this field names. Added in commit 70bbada5 (fzero-rs item
 live-audio); the video and work-RAM domains and every recording are
 unchanged.
 
+## The clock (version 3)
+
+`audio_clocks` is the audio processor's clock count at the capture
+(`smp.traceClocks`, two clocks a cycle), so `audio_cycle` is
+`audio_clocks >> 1` and `audio_clocks & 1` is the half the halving drops: odd
+is a capture on the clock after the cycle count's, even one half a cycle
+before it. `divider_clocks` is `BSNES_TRACE_APU`'s snapshot byte 49 at the
+same capture (the clock each timer's prescaler byte dropped, bit n timer n)
+and `dsp_step` its byte 42 (which of the sound chip's 32 steps it stands on).
+The other end cannot stand on half a cycle; these say where this machine
+stood, so it can tell a frame taken on an even clock from one on an odd, and
+whether the chip had taken the step of the cycle it stood inside. Added in
+commit a442694f (fzero-rs item half-cycle); the snapshot is read, never
+changed, and nothing runs unless `BSNES_LIVE` is set.
+
 ## Why a socket and hashes
 
 Hashes keep the steady state to 229 bytes a frame; a program that finds a
@@ -126,3 +145,13 @@ field on every frame), their picture hashes and maps byte-identical, and a
 1,200-frame cold `machine-1` carrying work RAM, video memory, the object
 table, the register shadow, the battery and audio is byte-identical before
 and after.
+
+Rebuilt again 2026-09-29 for protocol version 3 (commit a442694f, fzero-rs
+item half-cycle), under the same control: `7e3bde85034aafe9` →
+**`e5dc82492049bf20`** (sha256
+`e5dc82492049bf2080e82c12ef4173d2ed6d6352d828eeaafb7b9e3fe2c4cf91`). The
+control's `fzero-slot3` (220 frames) and `machine-1` (2,400) are the same run
+(`same-run`: every field on every frame), their picture hashes and maps
+identical, and a 1,200-frame cold `machine-1` carrying work RAM, video
+memory, the object table, the register shadow, the battery and audio is
+byte-identical before and after.
