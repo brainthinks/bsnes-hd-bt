@@ -9,6 +9,10 @@ The aim is to meet or exceed [DerKoun bsnes-hd](https://github.com/DerKoun/bsnes
 without changing the accurate path. Detailed remaining work is in
 [TODO.md](TODO.md).
 
+The branch `fzero-trace-recorder` also carries a trace recorder for the
+[fzero-rs](https://github.com/brainthinks/fzero-rs) project; see
+[fzero/README.md](fzero/README.md).
+
 Goals and priorities
 --------------------
 
