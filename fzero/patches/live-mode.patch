@@ -1,43 +1,3 @@
-From be6c055256547e79851799f65d1865dc47b06ca6 Mon Sep 17 00:00:00 2001
-From: Brian Andress <2215066+brainthinks@users.noreply.github.com>
-Date: Tue, 29 Sep 2026 01:54:05 -0500
-Subject: [PATCH] BSNES_LIVE: lockstep with a comparing program over a Unix
- socket (fzero-rs compare mode)
-
-What changed and why (fzero-rs item compare-bsnes, the owner's request of
-2026-09-29 for a zelda3-style compare mode against this recorder):
-
-- emulator/live.hpp (new): with BSNES_LIVE=<socket> the emulator connects,
-  says hello (protocol 1, lead 2, seven domain lengths), runs frame 1 on its
-  own, and from frame 2 runs one frame per 'F' request holding its pad,
-  answering 'S' with the frame counter and the SHA-256 of work RAM, video
-  memory, colour memory, the object table, the register shadow, audio RAM
-  and the DSP registers; 'D' sends the last frame's bytes of a mask of
-  domains; 'Q' or EOF quits. fzero/LIVE.md is the protocol.
-- sfc/system/system.cpp: System::frameEvent captures those domains at the
-  instant BSNES_TRACE_RAM observes (after the poke), when the mode is on.
-- target-bsnes/program/program.cpp: the frame loop waits for the pad and
-  answers after the frame; refuses run-ahead.
-- emulator/hdtrace.hpp: the pad replaces any script while the mode is on.
-- emulator/ramtrace.hpp: the register shadow is kept under BSNES_LIVE as
-  under BSNES_TRACE_REGS.
-- sfc/ppu{,-fast,-hd}: cgramForTrace, colour memory from the running core.
-
-Every addition is inert unless BSNES_LIVE is set: every existing recording
-reproduces byte for byte (fzero-rs tools/recorder_rebuild_control.sh).
----
- bsnes/emulator/hdtrace.hpp             |  14 ++
- bsnes/emulator/live.hpp                | 217 +++++++++++++++++++++++++
- bsnes/emulator/ramtrace.hpp            |   3 +-
- bsnes/sfc/ppu-fast/ppu.hpp             |   5 +
- bsnes/sfc/ppu-hd/ppu.hpp               |   5 +
- bsnes/sfc/ppu/ppu.cpp                  |   9 +
- bsnes/sfc/ppu/ppu.hpp                  |   4 +
- bsnes/sfc/system/system.cpp            |  12 ++
- bsnes/target-bsnes/program/program.cpp |  15 ++
- 9 files changed, 283 insertions(+), 1 deletion(-)
- create mode 100644 bsnes/emulator/live.hpp
-
 diff --git a/bsnes/emulator/hdtrace.hpp b/bsnes/emulator/hdtrace.hpp
 index c0850451..d26bee83 100644
 --- a/bsnes/emulator/hdtrace.hpp
@@ -370,16 +330,18 @@ index 3394970e..1f9aa82d 100644
    //is running (System::seedRegistersForTrace). Only the fast core is taught
    //it; the others answer for nothing and say so, returning false.
 diff --git a/bsnes/sfc/system/system.cpp b/bsnes/sfc/system/system.cpp
-index 3a5683a8..e42b31e7 100644
+index 3a5683a8..e585a8ac 100644
 --- a/bsnes/sfc/system/system.cpp
 +++ b/bsnes/sfc/system/system.cpp
-@@ -1,4 +1,5 @@
+@@ -1,5 +1,7 @@
  #include <emulator/ramtrace.hpp>
-+#include <emulator/live.hpp>
  #include <sfc/sfc.hpp>
++//after sfc.hpp, so the headers sfc.hpp brings in keep their own order
++#include <emulator/live.hpp>
  
  namespace SuperFamicom {
-@@ -132,6 +133,17 @@ auto System::frameEvent() -> void {
+ 
+@@ -132,6 +134,17 @@ auto System::frameEvent() -> void {
                                   dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
                                   audioRegs, oam);
    }
@@ -428,6 +390,3 @@ index e8e74876..3169f496 100644
    //BSNES_TIME_FRAME=1: where the wall clock goes, for measurement runs
    static uint64 runNs = 0, loopNs = 0, lastEnd = 0;
    bool timing = HdTrace::timing();
--- 
-2.43.0
-

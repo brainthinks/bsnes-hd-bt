@@ -90,3 +90,14 @@ hash differing asks for that domain's bytes, still at the same frame, before
 it sends the next pad. A Unix socket named by an environment variable needs no
 descriptor passing and no second channel, and the emulator's standard output
 and error stay free for its own messages.
+
+## The build
+
+Rebuilt 2026-09-29 under fzero-rs's `tools/recorder_rebuild_control.sh`
+(before, build, after): `837cbb77…` → **`a63783012b9cd350`** (sha256
+`a63783012b9cd35011e4e975e2a923fc7de931cd95a35847ccca370c24a39d72`), from
+commits be6c0552 and 8b606848. The control's two recordings (`fzero-slot3`
+from a slot, `machine-1` cold) are byte-identical before and after, and so is
+a cold `machine-1` of 1,200 frames carrying every domain the recorder has
+(work RAM, video memory, the object table, the register shadow, the battery
+and audio): the mode is inert unless `BSNES_LIVE` is set.
