@@ -13,6 +13,10 @@ struct PPU : Thread, PPUcounter {
   //Which core is running is a runtime setting, so this too is in ppu.cpp.
   auto oamForTrace(uint8* out) -> void;
 
+  //And colour memory, for BSNES_LIVE: 256 colours, each low byte first, from
+  //the core that is running. Defined in ppu.cpp for the same reason.
+  auto cgramForTrace(uint8* out) -> void;
+
   //BSNES_TRACE_REGS: the B-bus registers at a state load, from the core that
   //is running (System::seedRegistersForTrace). Only the fast core is taught
   //it; the others answer for nothing and say so, returning false.

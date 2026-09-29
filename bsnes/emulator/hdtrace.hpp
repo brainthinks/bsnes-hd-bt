@@ -107,8 +107,22 @@ namespace HdTrace {
     return remembered;
   }
 
+  //BSNES_LIVE (emulator/live.hpp): the pad the frame running now holds, sent by
+  //the program comparing itself against this machine, in the script file's
+  //bit order. It takes the place of any script while the mode is on.
+  inline auto live() -> bool {
+    static int on = -1;
+    if(on < 0) { auto p = getenv("BSNES_LIVE"); on = p && *p ? 1 : 0; }
+    return on == 1;
+  }
+  inline auto livePad() -> unsigned& {
+    static unsigned held = 0;
+    return held;
+  }
+
   //-1: no script, leave input to the hardware. 0/1: scripted button state.
   inline auto scriptedInput(unsigned input) -> int {
+    if(live()) return input < 12 && (livePad() >> input & 1) ? 1 : 0;
     if(auto frames = scriptFile()) {
       unsigned held = 0;
       long at = (long)frame();

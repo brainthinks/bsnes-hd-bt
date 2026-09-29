@@ -25,6 +25,11 @@ struct PPU : PPUcounter {
     for(uint n = 0; n < 544; n++) out[n] = readObject(n);
   }
 
+  //BSNES_LIVE: colour memory, 256 colours low byte first.
+  auto cgramForTrace(uint8* out) const -> void {
+    for(uint n = 0; n < 256; n++) out[n * 2] = cgram[n] & 0xff, out[n * 2 + 1] = cgram[n] >> 8;
+  }
+
   alwaysinline auto interlace() const -> bool;
   alwaysinline auto overscan() const -> bool;
   alwaysinline auto vdisp() const -> uint;

@@ -317,7 +317,8 @@ struct RegisterFile {
   static constexpr unsigned Bytes = 0x300;
 
   auto enabled() -> bool {
-    if(state < 0) state = getenv("BSNES_TRACE_REGS") ? 1 : 0;
+    //BSNES_LIVE compares this shadow too, so it keeps one without the flag.
+    if(state < 0) state = getenv("BSNES_TRACE_REGS") || getenv("BSNES_LIVE") ? 1 : 0;
     return state == 1;
   }
 

@@ -1,4 +1,5 @@
 #include <emulator/ramtrace.hpp>
+#include <emulator/live.hpp>
 #include <sfc/sfc.hpp>
 
 namespace SuperFamicom {
@@ -131,6 +132,17 @@ auto System::frameEvent() -> void {
                                  dsp.apuramForTrace(), dsp.registersForTrace(),
                                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
                                  audioRegs, oam);
+  }
+  //BSNES_LIVE: the same instant, for the program comparing itself against
+  //this machine (emulator/live.hpp); inert unless set.
+  if(Live::enabled()) {
+    uint8 oam[RamTrace::ObjectBytes];
+    ppu.oamForTrace(oam);
+    uint8 colours[512];
+    ppu.cgramForTrace(colours);
+    Live::capture(cpu.wram, ppu.vramForTrace(), colours, oam, RamTrace::registerFile().bytes,
+                  dsp.apuramForTrace(), dsp.registersForTrace(),
+                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep());
   }
 
   //refresh all cheat codes once per frame

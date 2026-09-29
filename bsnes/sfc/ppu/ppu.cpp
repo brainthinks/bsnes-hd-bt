@@ -208,6 +208,15 @@ auto PPU::oamForTrace(uint8* out) -> void {
   for(uint n = 0; n < 544; n++) out[n] = obj.oam.read(n);
 }
 
+auto PPU::cgramForTrace(uint8* out) -> void {
+  if(system.hdPPU()) { ppuhd.cgramForTrace(out); return; }
+  if(system.fastPPU()) { ppufast.cgramForTrace(out); return; }
+  for(uint n = 0; n < 256; n++) {
+    out[n * 2 + 0] = screen.cgram[n] >> 0 & 0xff;
+    out[n * 2 + 1] = screen.cgram[n] >> 8 & 0xff;
+  }
+}
+
 auto PPU::registersForTrace(uint8* values, uint8* known) -> bool {
   if(system.hdPPU() || !system.fastPPU()) return false;
   ppufast.registersForTrace(values, known);

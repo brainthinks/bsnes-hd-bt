@@ -1,4 +1,5 @@
 #include "../bsnes.hpp"
+#include <emulator/live.hpp>
 #include "platform.cpp"
 #include "game.cpp"
 #include "game-pak.cpp"
@@ -131,6 +132,20 @@ auto Program::main() -> void {
     if(HdTrace::frame() == at) program.saveState({"Quick/Slot ", slot});
   }
   if(auto limit = HdTrace::quitAfter(); limit && HdTrace::frame() > limit) return program.quit();
+
+  //BSNES_LIVE: wait for the pad of the frame the counter now names (after the
+  //lead), and answer for it once it has run. Run-ahead would run a frame more
+  //than once, so the mode refuses it. Inert unless set.
+  if(Live::enabled()) {
+    if(settings.emulator.runAhead.frames) {
+      fprintf(stderr, "BSNES_LIVE: refusing, run-ahead is on (Emulator/RunAhead/Frames)\n");
+      return program.quit();
+    }
+    if(!Live::beforeFrame(HdTrace::frame())) return program.quit();
+    emulator->run();
+    if(!Live::afterFrame(HdTrace::frame())) return program.quit();
+    return;
+  }
 
   //BSNES_TIME_FRAME=1: where the wall clock goes, for measurement runs
   static uint64 runNs = 0, loopNs = 0, lastEnd = 0;
