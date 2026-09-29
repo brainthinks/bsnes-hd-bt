@@ -143,7 +143,8 @@ auto System::frameEvent() -> void {
     ppu.cgramForTrace(colours);
     Live::capture(cpu.wram, ppu.vramForTrace(), colours, oam, RamTrace::registerFile().bytes,
                   dsp.apuramForTrace(), dsp.registersForTrace(),
-                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep());
+                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
+                  smp.traceClocks >> 1);
   }
 
   //refresh all cheat codes once per frame
