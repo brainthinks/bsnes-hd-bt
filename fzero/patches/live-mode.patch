@@ -27,10 +27,10 @@ index c0850451..d26bee83 100644
        long at = (long)frame();
 diff --git a/bsnes/emulator/live.hpp b/bsnes/emulator/live.hpp
 new file mode 100644
-index 00000000..a49b863c
+index 00000000..754af4d1
 --- /dev/null
 +++ b/bsnes/emulator/live.hpp
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,271 @@
 +#pragma once
 +
 +//BSNES_LIVE=<path of a Unix socket>: run in lockstep with a program comparing
@@ -48,7 +48,11 @@ index 00000000..a49b863c
 +//state on the same cycle, and from version 3 the clock count that cycle count
 +//is the half of, with the timers' dropped clocks and the sound chip's step, so
 +//the other end can tell a capture taken on an even clock -- half a cycle
-+//before the count's odd clock -- from one on an odd clock. A 'D'
++//before the count's odd clock -- from one on an odd clock. From version 4 the
++//audio domains are the machine's state on the whole cycle the reply names,
++//whichever half of it the machine stood in (the chip run on the step it had
++//not yet taken on a kept copy of itself, DSP::wholeCycleForTrace), and the
++//reply says how many steps that was. A 'D'
 +//request asks for the bytes of the last frame's domains; 'Q' or the socket
 +//closing ends the run.
 +
@@ -84,7 +88,13 @@ index 00000000..a49b863c
 +  //cycle count's low bit restored), the three timers' dropped clocks (u8,
 +  //BSNES_TRACE_APU's snapshot byte 49) and the sound chip's step (u8, its
 +  //byte 42), all three at the same capture.
-+  static constexpr unsigned Version = 3;
++  //Version 4 (2026-10-02): the audio domains are the state on the whole cycle
++  //`audio_cycle` (the chip's step for that cycle taken, the processor's access
++  //in it not yet made: what a capture on an odd clock holds), and the reply
++  //ends with how many steps the chip was run on from where it stood to get
++  //there (u8, nought or one). The three version 3 fields still say where the
++  //machine itself stood.
++  static constexpr unsigned Version = 4;
 +  static constexpr unsigned Lead = 2;
 +
 +  struct State {
@@ -103,6 +113,9 @@ index 00000000..a49b863c
 +    uint64_t audioClocks = 0;
 +    uint8_t dividerClocks = 0;
 +    uint8_t dspStep = 0;
++    //version 4: the steps the chip was run on, on a kept copy of itself, to
++    //take the audio domains on the whole cycle
++    uint8_t chipSteps = 0;
 +    uint8_t* bytes[Domains] = {};
 +  };
 +
@@ -184,7 +197,7 @@ index 00000000..a49b863c
 +                      const uint8_t* objects, const uint8_t* registers,
 +                      const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest,
 +                      uint64_t audioCycle, uint64_t audioClocks,
-+                      uint8_t dividerClocks, uint8_t dspStep) -> void {
++                      uint8_t dividerClocks, uint8_t dspStep, uint8_t chipSteps) -> void {
 +    auto& s = state();
 +    if(s.fd < 0) return;
 +    s.present = 0;
@@ -211,6 +224,7 @@ index 00000000..a49b863c
 +    s.audioClocks = audioClocks;
 +    s.dividerClocks = dividerClocks;
 +    s.dspStep = dspStep;
++    s.chipSteps = chipSteps;
 +    s.capturedFrame = HdTrace::frame();
 +    s.captured = true;
 +  }
@@ -259,7 +273,7 @@ index 00000000..a49b863c
 +    auto& s = state();
 +    if(frame < Lead) return true;
 +    if(s.fd < 0) return false;
-+    uint8_t reply[1 + 4 + 1 + 32 * Domains + 8 + 8 + 1 + 1] = {'S'};
++    uint8_t reply[1 + 4 + 1 + 32 * Domains + 8 + 8 + 1 + 1 + 1] = {'S'};
 +    put32(reply + 1, frame);
 +    //No capture this frame (the frame event never came) is said as no domain
 +    //at all, and the other end refuses.
@@ -281,6 +295,9 @@ index 00000000..a49b863c
 +    for(unsigned n = 0; n < 8; n++) reply[14 + 32 * Domains + n] = clocks >> (n * 8) & 0xff;
 +    reply[22 + 32 * Domains] = present ? s.dividerClocks : 0;
 +    reply[23 + 32 * Domains] = present ? s.dspStep : 0;
++    //version 4: the chip's steps run on to take the audio domains on the
++    //whole cycle (nought with no capture)
++    reply[24 + 32 * Domains] = present ? s.chipSteps : 0;
 +    return sendAll(reply, sizeof(reply));
 +  }
 +
@@ -299,6 +316,81 @@ index cd9a4bdb..6789ce4d 100644
      return state == 1;
    }
  
+diff --git a/bsnes/sfc/dsp/dsp.cpp b/bsnes/sfc/dsp/dsp.cpp
+index e0a50605..c8c9cd7f 100644
+--- a/bsnes/sfc/dsp/dsp.cpp
++++ b/bsnes/sfc/dsp/dsp.cpp
+@@ -17,9 +17,11 @@ auto DSP::main() -> void {
+   if(!configuration.hacks.dsp.fast) {
+     spc_dsp.run(1);
+     clock += 2;
++    traceSteps += 1;
+   } else {
+     spc_dsp.run(32);
+     clock += 2 * 32;
++    traceSteps += 32;
+   }
+ 
+   int count = spc_dsp.sample_count();
+@@ -251,6 +253,32 @@ auto DSP::registersForTrace() -> const uint8* {
+   return traceRegisters;
+ }
+ 
++//BSNES_LIVE (live protocol version 4): see dsp.hpp. Asked only where the chip
++//runs step by step with its echo writes reaching audio RAM (the audio
++//domains' own condition), so audio RAM is everything the chip writes outside
++//itself. SPC_DSP holds pointers into itself (each voice's registers, the echo
++//history's position) and into audio RAM and the sample buffer, so it is run
++//on in place rather than as a copy somewhere else, and its bytes put back.
++auto DSP::wholeCycleForTrace(uint steps, uint8* ram, uint8* registers) -> void {
++  if(!steps) {
++    memcpy(ram, apuram, sizeof(apuram));
++    for(uint address : range(SPC_DSP::register_count)) registers[address] = spc_dsp.read(address);
++    return;
++  }
++  static SPC_DSP keptChip;
++  static uint8 keptRam[sizeof(apuram)];
++  static int16 keptSamples[sizeof(samplebuffer) / sizeof(samplebuffer[0])];
++  keptChip = spc_dsp;
++  memcpy(keptRam, apuram, sizeof(apuram));
++  memcpy(keptSamples, samplebuffer, sizeof(samplebuffer));
++  spc_dsp.run(steps);
++  memcpy(ram, apuram, sizeof(apuram));
++  for(uint address : range(SPC_DSP::register_count)) registers[address] = spc_dsp.read(address);
++  spc_dsp = keptChip;
++  memcpy(apuram, keptRam, sizeof(apuram));
++  memcpy(samplebuffer, keptSamples, sizeof(samplebuffer));
++}
++
+ auto DSP::echoWritesToAudioRam() const -> bool {
+   return !configuration.hacks.dsp.echoShadow;
+ }
+diff --git a/bsnes/sfc/dsp/dsp.hpp b/bsnes/sfc/dsp/dsp.hpp
+index bc504c73..209cf6a1 100644
+--- a/bsnes/sfc/dsp/dsp.hpp
++++ b/bsnes/sfc/dsp/dsp.hpp
+@@ -103,6 +103,21 @@ struct DSP {
+ 
+   auto serialize(serializer&) -> void;
+ 
++  //BSNES_LIVE (live protocol version 4). The steps the chip has taken since
++  //power-on, one a step whatever main() is asked to run; never serialized,
++  //like smp.traceClocks, which it is held against, so the two count from the
++  //same instant. The processor's cycle c begins with the chip's step for it
++  //(SMP::step brings the chip up before the processor's access), so the chip
++  //has taken c + 1 steps once cycle c has begun.
++  uint64 traceSteps = 0;
++  //The audio RAM and the 128 registers as they would stand with the chip
++  //`steps` steps further on, the machine itself left exactly where it is: the
++  //chip, audio RAM and the sample buffer are kept, the chip run on in place,
++  //the two domains copied out, and all three put back byte for byte. Nothing
++  //else is touched and no port is read, so the processor's course is not
++  //moved. `steps` nought copies the two domains as they stand.
++  auto wholeCycleForTrace(uint steps, uint8* ram, uint8* registers) -> void;
++
+   int64 clock = 0;
+ 
+ private:
 diff --git a/bsnes/sfc/ppu-fast/ppu.hpp b/bsnes/sfc/ppu-fast/ppu.hpp
 index 8cef1d20..e4ebd673 100644
 --- a/bsnes/sfc/ppu-fast/ppu.hpp
@@ -367,7 +459,7 @@ index 3394970e..1f9aa82d 100644
    //is running (System::seedRegistersForTrace). Only the fast core is taught
    //it; the others answer for nothing and say so, returning false.
 diff --git a/bsnes/sfc/system/system.cpp b/bsnes/sfc/system/system.cpp
-index 3a5683a8..69fdce9f 100644
+index 3a5683a8..aeef2b37 100644
 --- a/bsnes/sfc/system/system.cpp
 +++ b/bsnes/sfc/system/system.cpp
 @@ -1,5 +1,7 @@
@@ -378,7 +470,7 @@ index 3a5683a8..69fdce9f 100644
  
  namespace SuperFamicom {
  
-@@ -132,6 +134,23 @@ auto System::frameEvent() -> void {
+@@ -132,6 +134,48 @@ auto System::frameEvent() -> void {
                                   dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
                                   audioRegs, oam);
    }
@@ -394,10 +486,35 @@ index 3a5683a8..69fdce9f 100644
 +    //nothing
 +    uint8 audioRegs[RamTrace::AudioSnapshotBytes];
 +    smp.snapshotForTrace(audioRegs);
++    //version 4: the audio domains on the whole cycle the reply names. The
++    //processor's cycle c begins with the chip's step for it, so on cycle c
++    //the chip has taken c + 1 steps; a capture stands on cycle c = clocks/2
++    //either inside a cycle (an odd clock, the chip's step for it taken) or
++    //on the boundary before one (an even clock), where the chip has taken
++    //that cycle's step already (the processor yielded inside the step that
++    //brought it up) or not yet (it yielded after a whole cycle's access).
++    //In the second the chip is run on the one step on its own, kept and put
++    //back (DSP::wholeCycleForTrace): no port is read and the processor does
++    //not move. Any other distance is refused: the audio domains are left out
++    //of the reply and stderr says why, once.
++    bool audioIsHonest = dsp.echoWritesToAudioRam() && dsp.runsStepByStep();
++    uint64 audioCycle = smp.traceClocks >> 1;
++    int64 chipSteps = (int64)(audioCycle + 1) - (int64)dsp.traceSteps;
++    bool whole = audioIsHonest && (chipSteps == 0 || chipSteps == 1);
++    if(audioIsHonest && !whole) {
++      static bool said = false;
++      if(!said) fprintf(stderr, "BSNES_LIVE: frame %u: the sound chip has taken %llu steps on the audio processor's cycle %llu, not %llu or one fewer; the audio domains are left out of this reply\n",
++                        (unsigned)HdTrace::frame(), (unsigned long long)dsp.traceSteps,
++                        (unsigned long long)audioCycle, (unsigned long long)(audioCycle + 1));
++      said = true;
++    }
++    static uint8 wholeRam[64 * 1024];
++    static uint8 wholeRegisters[128];
++    if(whole) dsp.wholeCycleForTrace((uint)chipSteps, wholeRam, wholeRegisters);
 +    Live::capture(cpu.wram, ppu.vramForTrace(), colours, oam, RamTrace::registerFile().bytes,
-+                  dsp.apuramForTrace(), dsp.registersForTrace(),
-+                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
-+                  smp.traceClocks >> 1, smp.traceClocks, audioRegs[49], audioRegs[42]);
++                  wholeRam, wholeRegisters, whole,
++                  audioCycle, smp.traceClocks, audioRegs[49], audioRegs[42],
++                  whole ? (uint8)chipSteps : 0);
 +  }
  
    //refresh all cheat codes once per frame
