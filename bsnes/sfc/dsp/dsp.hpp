@@ -103,6 +103,21 @@ struct DSP {
 
   auto serialize(serializer&) -> void;
 
+  //BSNES_LIVE (live protocol version 4). The steps the chip has taken since
+  //power-on, one a step whatever main() is asked to run; never serialized,
+  //like smp.traceClocks, which it is held against, so the two count from the
+  //same instant. The processor's cycle c begins with the chip's step for it
+  //(SMP::step brings the chip up before the processor's access), so the chip
+  //has taken c + 1 steps once cycle c has begun.
+  uint64 traceSteps = 0;
+  //The audio RAM and the 128 registers as they would stand with the chip
+  //`steps` steps further on, the machine itself left exactly where it is: the
+  //chip, audio RAM and the sample buffer are kept, the chip run on in place,
+  //the two domains copied out, and all three put back byte for byte. Nothing
+  //else is touched and no port is read, so the processor's course is not
+  //moved. `steps` nought copies the two domains as they stand.
+  auto wholeCycleForTrace(uint steps, uint8* ram, uint8* registers) -> void;
+
   int64 clock = 0;
 
 private:

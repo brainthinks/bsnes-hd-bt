@@ -146,10 +146,35 @@ auto System::frameEvent() -> void {
     //nothing
     uint8 audioRegs[RamTrace::AudioSnapshotBytes];
     smp.snapshotForTrace(audioRegs);
+    //version 4: the audio domains on the whole cycle the reply names. The
+    //processor's cycle c begins with the chip's step for it, so on cycle c
+    //the chip has taken c + 1 steps; a capture stands on cycle c = clocks/2
+    //either inside a cycle (an odd clock, the chip's step for it taken) or
+    //on the boundary before one (an even clock), where the chip has taken
+    //that cycle's step already (the processor yielded inside the step that
+    //brought it up) or not yet (it yielded after a whole cycle's access).
+    //In the second the chip is run on the one step on its own, kept and put
+    //back (DSP::wholeCycleForTrace): no port is read and the processor does
+    //not move. Any other distance is refused: the audio domains are left out
+    //of the reply and stderr says why, once.
+    bool audioIsHonest = dsp.echoWritesToAudioRam() && dsp.runsStepByStep();
+    uint64 audioCycle = smp.traceClocks >> 1;
+    int64 chipSteps = (int64)(audioCycle + 1) - (int64)dsp.traceSteps;
+    bool whole = audioIsHonest && (chipSteps == 0 || chipSteps == 1);
+    if(audioIsHonest && !whole) {
+      static bool said = false;
+      if(!said) fprintf(stderr, "BSNES_LIVE: frame %u: the sound chip has taken %llu steps on the audio processor's cycle %llu, not %llu or one fewer; the audio domains are left out of this reply\n",
+                        (unsigned)HdTrace::frame(), (unsigned long long)dsp.traceSteps,
+                        (unsigned long long)audioCycle, (unsigned long long)(audioCycle + 1));
+      said = true;
+    }
+    static uint8 wholeRam[64 * 1024];
+    static uint8 wholeRegisters[128];
+    if(whole) dsp.wholeCycleForTrace((uint)chipSteps, wholeRam, wholeRegisters);
     Live::capture(cpu.wram, ppu.vramForTrace(), colours, oam, RamTrace::registerFile().bytes,
-                  dsp.apuramForTrace(), dsp.registersForTrace(),
-                  dsp.echoWritesToAudioRam() && dsp.runsStepByStep(),
-                  smp.traceClocks >> 1, smp.traceClocks, audioRegs[49], audioRegs[42]);
+                  wholeRam, wholeRegisters, whole,
+                  audioCycle, smp.traceClocks, audioRegs[49], audioRegs[42],
+                  whole ? (uint8)chipSteps : 0);
   }
 
   //refresh all cheat codes once per frame

@@ -15,7 +15,11 @@
 //state on the same cycle, and from version 3 the clock count that cycle count
 //is the half of, with the timers' dropped clocks and the sound chip's step, so
 //the other end can tell a capture taken on an even clock -- half a cycle
-//before the count's odd clock -- from one on an odd clock. A 'D'
+//before the count's odd clock -- from one on an odd clock. From version 4 the
+//audio domains are the machine's state on the whole cycle the reply names,
+//whichever half of it the machine stood in (the chip run on the step it had
+//not yet taken on a kept copy of itself, DSP::wholeCycleForTrace), and the
+//reply says how many steps that was. A 'D'
 //request asks for the bytes of the last frame's domains; 'Q' or the socket
 //closing ends the run.
 
@@ -51,7 +55,13 @@ namespace Live {
   //cycle count's low bit restored), the three timers' dropped clocks (u8,
   //BSNES_TRACE_APU's snapshot byte 49) and the sound chip's step (u8, its
   //byte 42), all three at the same capture.
-  static constexpr unsigned Version = 3;
+  //Version 4 (2026-10-02): the audio domains are the state on the whole cycle
+  //`audio_cycle` (the chip's step for that cycle taken, the processor's access
+  //in it not yet made: what a capture on an odd clock holds), and the reply
+  //ends with how many steps the chip was run on from where it stood to get
+  //there (u8, nought or one). The three version 3 fields still say where the
+  //machine itself stood.
+  static constexpr unsigned Version = 4;
   static constexpr unsigned Lead = 2;
 
   struct State {
@@ -70,6 +80,9 @@ namespace Live {
     uint64_t audioClocks = 0;
     uint8_t dividerClocks = 0;
     uint8_t dspStep = 0;
+    //version 4: the steps the chip was run on, on a kept copy of itself, to
+    //take the audio domains on the whole cycle
+    uint8_t chipSteps = 0;
     uint8_t* bytes[Domains] = {};
   };
 
@@ -151,7 +164,7 @@ namespace Live {
                       const uint8_t* objects, const uint8_t* registers,
                       const uint8_t* apu, const uint8_t* dspRegs, bool audioIsHonest,
                       uint64_t audioCycle, uint64_t audioClocks,
-                      uint8_t dividerClocks, uint8_t dspStep) -> void {
+                      uint8_t dividerClocks, uint8_t dspStep, uint8_t chipSteps) -> void {
     auto& s = state();
     if(s.fd < 0) return;
     s.present = 0;
@@ -178,6 +191,7 @@ namespace Live {
     s.audioClocks = audioClocks;
     s.dividerClocks = dividerClocks;
     s.dspStep = dspStep;
+    s.chipSteps = chipSteps;
     s.capturedFrame = HdTrace::frame();
     s.captured = true;
   }
@@ -226,7 +240,7 @@ namespace Live {
     auto& s = state();
     if(frame < Lead) return true;
     if(s.fd < 0) return false;
-    uint8_t reply[1 + 4 + 1 + 32 * Domains + 8 + 8 + 1 + 1] = {'S'};
+    uint8_t reply[1 + 4 + 1 + 32 * Domains + 8 + 8 + 1 + 1 + 1] = {'S'};
     put32(reply + 1, frame);
     //No capture this frame (the frame event never came) is said as no domain
     //at all, and the other end refuses.
@@ -248,6 +262,9 @@ namespace Live {
     for(unsigned n = 0; n < 8; n++) reply[14 + 32 * Domains + n] = clocks >> (n * 8) & 0xff;
     reply[22 + 32 * Domains] = present ? s.dividerClocks : 0;
     reply[23 + 32 * Domains] = present ? s.dspStep : 0;
+    //version 4: the chip's steps run on to take the audio domains on the
+    //whole cycle (nought with no capture)
+    reply[24 + 32 * Domains] = present ? s.chipSteps : 0;
     return sendAll(reply, sizeof(reply));
   }
 

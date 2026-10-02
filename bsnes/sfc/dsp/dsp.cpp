@@ -17,9 +17,11 @@ auto DSP::main() -> void {
   if(!configuration.hacks.dsp.fast) {
     spc_dsp.run(1);
     clock += 2;
+    traceSteps += 1;
   } else {
     spc_dsp.run(32);
     clock += 2 * 32;
+    traceSteps += 32;
   }
 
   int count = spc_dsp.sample_count();
@@ -249,6 +251,32 @@ auto DSP::registersForTrace() -> const uint8* {
     traceRegisters[address] = spc_dsp.read(address);
   }
   return traceRegisters;
+}
+
+//BSNES_LIVE (live protocol version 4): see dsp.hpp. Asked only where the chip
+//runs step by step with its echo writes reaching audio RAM (the audio
+//domains' own condition), so audio RAM is everything the chip writes outside
+//itself. SPC_DSP holds pointers into itself (each voice's registers, the echo
+//history's position) and into audio RAM and the sample buffer, so it is run
+//on in place rather than as a copy somewhere else, and its bytes put back.
+auto DSP::wholeCycleForTrace(uint steps, uint8* ram, uint8* registers) -> void {
+  if(!steps) {
+    memcpy(ram, apuram, sizeof(apuram));
+    for(uint address : range(SPC_DSP::register_count)) registers[address] = spc_dsp.read(address);
+    return;
+  }
+  static SPC_DSP keptChip;
+  static uint8 keptRam[sizeof(apuram)];
+  static int16 keptSamples[sizeof(samplebuffer) / sizeof(samplebuffer[0])];
+  keptChip = spc_dsp;
+  memcpy(keptRam, apuram, sizeof(apuram));
+  memcpy(keptSamples, samplebuffer, sizeof(samplebuffer));
+  spc_dsp.run(steps);
+  memcpy(ram, apuram, sizeof(apuram));
+  for(uint address : range(SPC_DSP::register_count)) registers[address] = spc_dsp.read(address);
+  spc_dsp = keptChip;
+  memcpy(apuram, keptRam, sizeof(apuram));
+  memcpy(samplebuffer, keptSamples, sizeof(samplebuffer));
 }
 
 auto DSP::echoWritesToAudioRam() const -> bool {
